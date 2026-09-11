@@ -24,14 +24,21 @@ def _owner(state: GraphState, added_n, added_e, fid_node: str, owners: list, tur
 
 
 def _add_file(state: GraphState, added_n, added_e, f: dict[str, Any], turn: int) -> None:
-    fid = f.get("id") or f.get("file_id")
+    # As tools do Drive são inconsistentes: search/list/metadata trazem id/name/webViewLink no
+    # topo; google_file_read aninha em "metadata" com document_id/title/web_view_link.
+    if isinstance(f.get("metadata"), dict) and (
+        f["metadata"].get("id") or f["metadata"].get("file_id") or f["metadata"].get("document_id")
+    ):
+        f = f["metadata"]
+    fid = f.get("id") or f.get("file_id") or f.get("document_id")
     if not fid:
         return
     node_id = drive_id(fid)
     name = f.get("name") or f.get("title") or "(arquivo)"
+    url = f.get("webViewLink") or f.get("web_view_link") or f.get("link")
     node = state.add_node(GraphNode(
         id=node_id, type="drive_file", label=name[:60], source="drive",
-        url=f.get("webViewLink") or f.get("link"), first_seen_turn=turn,
+        url=url, first_seen_turn=turn,
         props={"name": name, "mimeType": f.get("mimeType"), "file_id": fid},
     ))
     if node:

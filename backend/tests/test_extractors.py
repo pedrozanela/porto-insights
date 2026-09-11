@@ -54,3 +54,15 @@ def test_drive_search_creates_file():
                          "webViewLink": "https://docs.google.com/document/d/f1/edit"}]}
     nodes, _ = extract_drive(state, "google_drive_search", result, turn=1)
     assert any(n.type == "drive_file" and n.props["file_id"] == "f1" for n in nodes)
+
+
+def test_drive_file_read_nested_metadata():
+    # google_file_read aninha id/name em "metadata"; o extractor deve desembrulhar e criar o nó.
+    state = GraphState()
+    # formato REAL do file_read: metadata.{document_id, title, web_view_link}
+    result = {"metadata": {"document_id": "f9", "title": "Pauta Comitê",
+                           "web_view_link": "https://docs.google.com/document/d/f9/edit"},
+              "content": "texto...", "truncated": False}
+    nodes, _ = extract_drive(state, "google_file_read", result, turn=1)
+    n = next((x for x in nodes if x.type == "drive_file"), None)
+    assert n and n.props["file_id"] == "f9" and n.label == "Pauta Comitê" and n.url
