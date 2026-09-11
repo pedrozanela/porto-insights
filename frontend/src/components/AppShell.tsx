@@ -58,7 +58,7 @@ export function AppShell() {
           />
         </section>
         <aside className="hidden min-h-0 lg:block">
-          <GraphPanel />
+          <GraphPanel graph={conv.graph} />
         </aside>
       </main>
     </div>

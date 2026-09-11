@@ -1,27 +1,47 @@
-// Estado da conversa: mensagens, streaming, troca de modelo, e navegação entre conversas
-// persistidas (histórico no Lakebase). A persistência real é no backend; aqui é o espelho da UI.
+// Estado da conversa: mensagens (com trace de ferramentas e card do Genie), grafo acumulativo,
+// streaming, troca de modelo e navegação entre conversas persistidas.
 import { useCallback, useRef, useState } from "react";
 import { streamChat, type SSEEvent } from "../api/sse";
 import { getConversation } from "../api/client";
-
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
+import type { ChatMessage, GraphData, GraphNode, GraphEdge, GenieCard } from "./types";
 
 function newConversationId(): string {
   return `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const EMPTY_GRAPH: GraphData = { nodes: [], edges: [], lastTurn: 0 };
+
 export function useConversation() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [graph, setGraph] = useState<GraphData>(EMPTY_GRAPH);
   const [conversationId, setConversationId] = useState<string>(() => newConversationId());
   const [streaming, setStreaming] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Incrementa quando o histórico muda (turno concluído, nova conversa), para a lista refazer o fetch.
   const [changeToken, setChangeToken] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Helpers de atualização da última mensagem do assistente.
+  const patchLastAssistant = (fn: (m: ChatMessage) => ChatMessage) =>
+    setMessages((ms) => {
+      const copy = [...ms];
+      for (let i = copy.length - 1; i >= 0; i--) {
+        if (copy[i].role === "assistant") {
+          copy[i] = fn(copy[i]);
+          break;
+        }
+      }
+      return copy;
+    });
+
+  const mergeGraph = (nodes: GraphNode[], edges: GraphEdge[], turn: number) =>
+    setGraph((g) => {
+      const byId = new Map(g.nodes.map((n) => [n.id, n]));
+      nodes.forEach((n) => byId.set(n.id, n));
+      const eById = new Map(g.edges.map((e) => [e.id, e]));
+      edges.forEach((e) => eById.set(e.id, e));
+      return { nodes: [...byId.values()], edges: [...eById.values()], lastTurn: turn };
+    });
 
   const send = useCallback(
     async (text: string, model: string) => {
@@ -36,21 +56,49 @@ export function useConversation() {
       const abort = new AbortController();
       abortRef.current = abort;
 
-      const appendToLast = (chunk: string) =>
-        setMessages((m) => {
-          const copy = [...m];
-          const last = copy[copy.length - 1];
-          if (last && last.role === "assistant") copy[copy.length - 1] = { ...last, content: last.content + chunk };
-          return copy;
-        });
-
       try {
         await streamChat(
           { conversation_id: conversationId, message: trimmed, model },
           (e: SSEEvent) => {
-            if (e.type === "token") appendToLast(String(e.text ?? ""));
-            else if (e.type === "warning") setWarning(String(e.message ?? ""));
-            else if (e.type === "error") setError(String(e.message ?? "Erro ao responder."));
+            switch (e.type) {
+              case "token":
+                patchLastAssistant((m) => ({ ...m, content: m.content + String(e.text ?? "") }));
+                break;
+              case "tool_call_start":
+                patchLastAssistant((m) => ({
+                  ...m,
+                  trace: { label: String(e.label ?? "Consultando…"), steps: [], done: false },
+                }));
+                break;
+              case "tool_progress":
+                patchLastAssistant((m) => ({
+                  ...m,
+                  trace: m.trace
+                    ? { ...m.trace, steps: [...m.trace.steps, String(e.step ?? "")] }
+                    : { label: "Consultando…", steps: [String(e.step ?? "")], done: false },
+                }));
+                break;
+              case "tool_call_result":
+                patchLastAssistant((m) => ({
+                  ...m,
+                  card: e.card as GenieCard,
+                  trace: m.trace ? { ...m.trace, done: true } : m.trace,
+                }));
+                break;
+              case "graph_delta":
+                mergeGraph(
+                  (e.added_nodes as GraphNode[]) ?? [],
+                  (e.added_edges as GraphEdge[]) ?? [],
+                  Number(e.turn ?? 0),
+                );
+                break;
+              case "warning":
+                setWarning(String(e.message ?? ""));
+                break;
+              case "error":
+                setError(String(e.message ?? "Erro ao responder."));
+                break;
+            }
           },
           abort.signal,
         );
@@ -59,29 +107,29 @@ export function useConversation() {
       } finally {
         setStreaming(false);
         abortRef.current = null;
-        setChangeToken((t) => t + 1); // atualiza a lista de histórico (título/ordem)
+        setChangeToken((t) => t + 1);
       }
     },
     [streaming, conversationId],
   );
 
-  // Nova conversa: NÃO apaga a atual — só começa uma nova (a anterior fica no histórico).
   const startNew = useCallback(() => {
     abortRef.current?.abort();
     setConversationId(newConversationId());
     setMessages([]);
+    setGraph(EMPTY_GRAPH);
     setWarning(null);
     setError(null);
     setStreaming(false);
   }, []);
 
-  // Abre uma conversa do histórico, carregando as mensagens do backend.
   const open = useCallback(async (id: string) => {
     abortRef.current?.abort();
     setWarning(null);
     setError(null);
     setStreaming(false);
     setConversationId(id);
+    setGraph(EMPTY_GRAPH); // o grafo é reconstruído conforme novas perguntas nesta sessão
     try {
       const msgs = await getConversation(id);
       setMessages(msgs.map((m) => ({ role: m.role, content: m.content })));
@@ -92,8 +140,7 @@ export function useConversation() {
   }, []);
 
   return {
-    messages, conversationId, streaming, warning, error, changeToken,
+    messages, graph, conversationId, streaming, warning, error, changeToken,
     send, startNew, open,
-    notifyChanged: () => setChangeToken((t) => t + 1),
   };
 }

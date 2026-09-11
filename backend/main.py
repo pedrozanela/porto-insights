@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from .agent.loop import run_turn
 from .auth import UserContext, get_user_context
 from .config import get_settings
+from .graph.store import GraphStore
 from .store.base import ConversationStore
 from .store.memory import InMemoryConversationStore
 
@@ -48,6 +49,7 @@ def _build_store() -> ConversationStore:
 
 
 store = _build_store()
+graph_store = GraphStore()
 
 
 class ChatRequest(BaseModel):
@@ -79,8 +81,8 @@ def me(user: UserContext = Depends(get_user_context)) -> dict:
 
 @app.post("/api/chat")
 def chat(req: ChatRequest, user: UserContext = Depends(get_user_context)) -> StreamingResponse:
-    """Um turno de conversa, streamado como SSE. Toda chamada de modelo usa o token do usuário."""
-    generator = run_turn(user, settings, store, req.conversation_id, req.message, req.model)
+    """Um turno de conversa, streamado como SSE. Toda chamada (modelo, Genie) usa o token do usuário."""
+    generator = run_turn(user, settings, store, graph_store, req.conversation_id, req.message, req.model)
     return StreamingResponse(
         generator,
         media_type="text/event-stream",
@@ -104,8 +106,9 @@ def get_conversation(conversation_id: str, user: UserContext = Depends(get_user_
 
 @app.post("/api/conversations/{conversation_id}/reset")
 def reset_conversation(conversation_id: str, user: UserContext = Depends(get_user_context)) -> dict:
-    """Apaga a conversa (mensagens + fio do Genie). Usado pelo botão 'Apagar'."""
+    """Apaga a conversa (mensagens + fio do Genie + grafo). Usado pelo botão 'Apagar'."""
     store.reset(user.email, conversation_id)
+    graph_store.reset(user.email, conversation_id)
     return {"status": "ok"}
 
 

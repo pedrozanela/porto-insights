@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ChatMessage } from "../../state/useConversation";
+import type { ChatMessage } from "../../state/types";
 import { Message } from "./Message";
 import { Composer } from "./Composer";
 
