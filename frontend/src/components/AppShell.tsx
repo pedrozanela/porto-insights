@@ -61,6 +61,7 @@ export function AppShell() {
         <aside className="hidden min-h-0 lg:block">
           <GraphPanel
             graph={conv.graph}
+            onPromote={conv.promoteNodes}
             onAskAbout={(node) => {
               const kind = { calendar_event: "o evento", email: "o email", email_thread: "a thread",
                 drive_file: "o documento", person: "a pessoa", genie_answer: "esta resposta de dados",

@@ -34,6 +34,9 @@ def build_suggestions(state: GraphState, asked: set[str] | None = None, limit: i
     out: list[dict] = []
     seen_prompts: set[str] = set()
 
+    def visible(n) -> bool:  # sugestões só sobre o grafo visível (não staging)
+        return not n.props.get("staged")
+
     def add(label: str, prompt: str, node_id: str) -> None:
         key = prompt.strip().lower()
         if key in asked_norm or key in seen_prompts or len(out) >= limit:
@@ -44,10 +47,10 @@ def build_suggestions(state: GraphState, asked: set[str] | None = None, limit: i
     def has(nid: str, *t: str) -> bool:
         return bool(types.get(nid, set()) & set(t))
 
-    events = [n for n in state.nodes.values() if n.type == "calendar_event"]
-    emails = [n for n in state.nodes.values() if n.type == "email"]
-    docs = [n for n in state.nodes.values() if n.type == "drive_file"]
-    genies = [n for n in state.nodes.values() if n.type == "genie_answer"]
+    events = [n for n in state.nodes.values() if n.type == "calendar_event" and visible(n)]
+    emails = [n for n in state.nodes.values() if n.type == "email" and visible(n)]
+    docs = [n for n in state.nodes.values() if n.type == "drive_file" and visible(n)]
+    genies = [n for n in state.nodes.values() if n.type == "genie_answer" and visible(n)]
 
     # 1. evento sem email
     for ev in events:
@@ -80,7 +83,7 @@ def build_suggestions(state: GraphState, asked: set[str] | None = None, limit: i
     # 5. pessoa (real, não Você) com 2+ objetos ligados
     types2, neigh = _adjacency(state)
     for p in state.nodes.values():
-        if p.type != "person" or p.props.get("provisional") or p.props.get("is_self"):
+        if p.type != "person" or p.props.get("provisional") or p.props.get("is_self") or not visible(p):
             continue
         objs = [x for x in neigh.get(p.id, []) if x.type != "person"]
         if len(objs) >= 2:

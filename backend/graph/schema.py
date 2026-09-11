@@ -90,15 +90,24 @@ class GraphState:
                             rationale=e.rationale, evidence=e.evidence)
             if self.add_edge(new):
                 rerouted.append(new)
+        # preserva visibilidade: se o provisório já estava visível, o real também fica
+        if not self.nodes[from_id].props.get("staged"):
+            self.nodes[to_id].props["staged"] = False
         self.remove_node(from_id)
         return rerouted, from_id
 
 
+def is_visible(node: GraphNode) -> bool:
+    return not node.props.get("staged")
+
+
 def delta_payload(added_nodes: list[GraphNode], added_edges: list[GraphEdge], turn: int,
-                  removed_node_ids: list[str] | None = None) -> dict:
+                  removed_node_ids: list[str] | None = None,
+                  promoted_node_ids: list[str] | None = None) -> dict:
     return {
         "added_nodes": [asdict(n) for n in added_nodes],
         "added_edges": [asdict(e) for e in added_edges],
         "removed_node_ids": removed_node_ids or [],
+        "promoted_node_ids": promoted_node_ids or [],
         "turn": turn,
     }

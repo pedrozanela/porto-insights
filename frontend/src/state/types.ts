@@ -71,4 +71,5 @@ export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
   lastTurn: number;
+  promoted: string[]; // ids que passaram a visíveis no último delta (para animar)
 }

@@ -163,8 +163,12 @@ resposta dada ao usuário neste turno. Faça duas coisas:
    no resumo de um documento). Cada uma: {"name": "Nome Sobrenome", "in_node": id_do_no_de_conteudo,
    "confidence": 0..1}. APENAS pessoas reais (não empresas, produtos, times ou lugares).
 
-Regras: use SOMENTE ids fornecidos em `source`/`target`/`in_node`; não invente ids. Prefira poucas
-propostas de alta confiança. Responda APENAS um JSON: {"edges": [...], "mentions": [...]}.
+3) relevant_node_ids: ids dos nós que são DIRETAMENTE relevantes para a resposta deste turno
+   (o que a pergunta pediu). Ignore nós que apareceram só como ruído de busca.
+
+Regras: use SOMENTE ids fornecidos em `source`/`target`/`in_node`/`relevant_node_ids`; não invente
+ids. Prefira poucas propostas de alta confiança. Responda APENAS um JSON:
+{"edges": [...], "mentions": [...], "relevant_node_ids": [...]}.
 
 NÓS:
 """
@@ -181,12 +185,12 @@ def _find_person_by_name(state: GraphState, name: str) -> GraphNode | None:
 async def semantic_links(
     client, model: str, state: GraphState, turn: int, min_confidence: float,
     *, answer_text: str = "", mention_min_conf: float = 0.7,
-) -> tuple[list[GraphNode], list[GraphEdge]]:
-    """LLM propõe related_to (entre nós) e mentions (pessoas provisórias citadas no texto).
-    Retorna (nós novos, arestas novas)."""
+) -> tuple[list[GraphNode], list[GraphEdge], set[str]]:
+    """LLM propõe related_to (entre nós), mentions (pessoas citadas) e relevant_node_ids.
+    Retorna (nós novos, arestas novas, ids relevantes p/ promoção)."""
     nodes = list(state.nodes.values())
     if len(nodes) < 2 and not answer_text:
-        return [], []
+        return [], [], set()
     listing = "\n".join(f'- {{"id": "{n.id}", "tipo": "{n.type}", "rotulo": "{n.label[:50]}"}}' for n in nodes)
     prompt = SEMANTIC_PROMPT + listing + f"\n\nTEXTO DA RESPOSTA:\n{answer_text[:2000]}"
     try:
@@ -197,10 +201,11 @@ async def semantic_links(
         data = json.loads(content)
     except Exception as e:  # noqa: BLE001
         logger.info("semantic linker falhou/sem saída: %s", str(e)[:100])
-        return [], []
+        return [], [], set()
 
     added_nodes: list[GraphNode] = []
     added_edges: list[GraphEdge] = []
+    relevant_ids: set[str] = {i for i in (data.get("relevant_node_ids") or []) if i in state.nodes}
 
     for p in data.get("edges", []) or []:
         src, tgt = p.get("source"), p.get("target")
@@ -231,4 +236,4 @@ async def semantic_links(
             first_seen_turn=turn, weight=0.3, confidence=conf, evidence=["citado no conteúdo"]))
         if e:
             added_edges.append(e)
-    return added_nodes, added_edges
+    return added_nodes, added_edges, relevant_ids

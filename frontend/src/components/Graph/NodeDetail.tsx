@@ -5,6 +5,7 @@ interface Props {
   node: GraphNode;
   graph: GraphData;
   onAskAbout: (node: GraphNode) => void;
+  onPromote: (ids: string[]) => void;
   onClose: () => void;
 }
 
@@ -12,7 +13,8 @@ const SOURCE_LABEL: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Agenda", drive: "Google Drive", genie: "Genie One",
 };
 
-export function NodeDetail({ node, graph, onAskAbout, onClose }: Props) {
+export function NodeDetail({ node, graph, onAskAbout, onPromote, onClose }: Props) {
+  const stagedPeople = (node.props?.staged_people as { id: string; name: string }[] | undefined) ?? [];
   // Vizinhos: nós ligados por qualquer aresta.
   const neighborIds = new Set<string>();
   graph.edges.forEach((e) => {
@@ -58,6 +60,25 @@ export function NodeDetail({ node, graph, onAskAbout, onClose }: Props) {
           <ul className="mt-1 space-y-0.5 text-sm text-textc">
             {neighbors.slice(0, 8).map((n) => (
               <li key={n.id} className="truncate">· {n.label}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {stagedPeople.length > 0 && (
+        <div className="mt-3">
+          <div className="text-xs font-semibold text-muted">
+            +{stagedPeople.length} participantes (ocultos)
+          </div>
+          <ul className="mt-1 space-y-1">
+            {stagedPeople.map((p) => (
+              <li key={p.id} className="flex items-center justify-between gap-2 text-sm">
+                <span className="truncate text-textc">{p.name}</span>
+                <button onClick={() => onPromote([p.id])}
+                  className="rounded-md border border-borderc px-2 py-0.5 text-xs text-primary hover:bg-surfaceMuted">
+                  mostrar
+                </button>
+              </li>
             ))}
           </ul>
         </div>

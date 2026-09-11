@@ -2,14 +2,14 @@
 // streaming, troca de modelo e navegação entre conversas persistidas.
 import { useCallback, useRef, useState } from "react";
 import { streamChat, type SSEEvent } from "../api/sse";
-import { getConversation } from "../api/client";
+import { getConversation, promoteGraphNodes } from "../api/client";
 import type { ChatMessage, GraphData, GraphNode, GraphEdge, GenieCard, Suggestion } from "./types";
 
 function newConversationId(): string {
   return `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const EMPTY_GRAPH: GraphData = { nodes: [], edges: [], lastTurn: 0 };
+const EMPTY_GRAPH: GraphData = { nodes: [], edges: [], lastTurn: 0, promoted: [] };
 
 export function useConversation() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -35,17 +35,16 @@ export function useConversation() {
       return copy;
     });
 
-  const mergeGraph = (nodes: GraphNode[], edges: GraphEdge[], turn: number, removed: string[]) =>
+  const mergeGraph = (nodes: GraphNode[], edges: GraphEdge[], turn: number, removed: string[], promoted: string[]) =>
     setGraph((g) => {
       const byId = new Map(g.nodes.map((n) => [n.id, n]));
-      nodes.forEach((n) => byId.set(n.id, n)); // merge por id (atualiza props, ex.: is_self)
+      nodes.forEach((n) => byId.set(n.id, n)); // merge por id (atualiza props, ex.: is_self, +N)
       removed.forEach((id) => byId.delete(id));
       const eById = new Map(g.edges.map((e) => [e.id, e]));
       edges.forEach((e) => eById.set(e.id, e));
-      // descarta arestas que tocam nós removidos
       const alive = new Set(byId.keys());
       for (const [id, e] of [...eById]) if (!alive.has(e.source) || !alive.has(e.target)) eById.delete(id);
-      return { nodes: [...byId.values()], edges: [...eById.values()], lastTurn: turn };
+      return { nodes: [...byId.values()], edges: [...eById.values()], lastTurn: turn || g.lastTurn, promoted };
     });
 
   // Move a narração pendente (texto antes de uma tool) para o trace, tirando-a da resposta.
@@ -131,6 +130,7 @@ export function useConversation() {
                   (e.added_edges as GraphEdge[]) ?? [],
                   Number(e.turn ?? 0),
                   (e.removed_node_ids as string[]) ?? [],
+                  (e.promoted_node_ids as string[]) ?? [],
                 );
                 break;
               case "suggestions":
@@ -188,8 +188,16 @@ export function useConversation() {
     }
   }, []);
 
+  // Promoção manual (ex.: participante colapsado escolhido no painel de detalhe).
+  const promoteNodes = useCallback(async (ids: string[]) => {
+    try {
+      const d = await promoteGraphNodes(conversationId, ids);
+      mergeGraph(d.added_nodes ?? [], d.added_edges ?? [], 0, d.removed_node_ids ?? [], d.promoted_node_ids ?? []);
+    } catch { /* silencioso */ }
+  }, [conversationId]);
+
   return {
     messages, graph, suggestions, conversationId, streaming, warning, error, changeToken,
-    send, startNew, open,
+    send, startNew, open, promoteNodes,
   };
 }

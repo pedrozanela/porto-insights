@@ -31,6 +31,14 @@ com a tool de leitura (calendar_event_get, gmail_read_message/gmail_get_thread, 
 google_file_read) — é isso que traz os detalhes (participantes, corpo, conteúdo) e alimenta o \
 grafo. Não despeje a lista inteira de resultados de busca; foque no que responde à pergunta.
 
+Ao procurar um item específico (um evento, um email ou um documento), use SEMPRE a tool de
+listagem/busca com filtros (para o Calendar, o parâmetro `query` com o nome do participante ou
+do título, e uma janela de tempo estreita) e abra com a tool de leitura (`..._get`/`..._read`)
+APENAS o item que corresponde à pergunta. NUNCA abra vários candidatos "para conferir". Se a
+listagem ficar ambígua (mais de um forte candidato), PERGUNTE ao usuário qual é, em vez de abrir
+todos. Se identificou a reunião por um documento de notas ou email, procure no Calendar por esse
+título/data e abra só aquele evento.
+
 Orquestração por tipo de pergunta:
 - Sobre **reunião, agenda, compromisso ou "quando encontrei/tive X"**: PRIMEIRO resolva o \
 evento no Calendar (calendar_event_list para achar, calendar_event_get para abrir: título, \

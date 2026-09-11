@@ -60,6 +60,11 @@ class ChatRequest(BaseModel):
     message: str
     model: str = ""
 
+
+class PromoteRequest(BaseModel):
+    conversation_id: str
+    node_ids: list[str]
+
 # dist/ do frontend (buildado antes do deploy). Em dev antes do 1º build pode não existir.
 DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
@@ -91,6 +96,18 @@ def chat(req: ChatRequest, user: UserContext = Depends(get_user_context)) -> Str
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/graph/promote")
+def promote_graph(req: PromoteRequest, user: UserContext = Depends(get_user_context)) -> dict:
+    """Promoção manual de nós em staging (ex.: participante escolhido no painel de detalhe)."""
+    from .graph.promotion import promote_ids, visible_delta
+    from .graph.schema import delta_payload
+
+    state = graph_store.get(user.email, req.conversation_id)
+    newly = promote_ids(state, req.node_ids)
+    vis_nodes, vis_edges = visible_delta(state)
+    return delta_payload(vis_nodes, vis_edges, turn=0, promoted_node_ids=list(newly))
 
 
 @app.get("/api/conversations")

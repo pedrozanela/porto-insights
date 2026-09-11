@@ -20,9 +20,10 @@ from ..genie.client import run_genie_ask
 from ..genie.composite import GENIE_TOOL, card_payload, compact_result_for_llm
 from ..graph.extractors.genie import extract_genie
 from ..graph.linker import (
-    creates_nodes, deterministic_links, extract_from_tool, reconcile_provisionals, semantic_links,
+    NODE_CREATING_TOOLS, deterministic_links, extract_from_tool, reconcile_provisionals, semantic_links,
 )
-from ..graph.schema import GraphNode, delta_payload
+from ..graph.promotion import promote, visible_delta
+from ..graph.schema import GraphNode, delta_payload, is_visible
 from ..graph.suggestions import build_suggestions
 from ..graph.store import GraphStore
 from ..llm import build_async_client, stream_turn
@@ -53,6 +54,29 @@ def _looks_like_auth_error(msg: str) -> bool:
     return any(h in m for h in AUTH_HINTS)
 
 
+def _primary_ids(tool_name: str, data: dict) -> list[str]:
+    """IDs do(s) nó(s) primário(s) buscado(s) por uma tool `get` (para marcar via_get pelo id)."""
+    from ..graph.extractors.common import drive_id, email_id, event_id, thread_id
+    ids: list[str] = []
+    if tool_name == "calendar_event_get" and data.get("id"):
+        ids.append(event_id(data["id"]))
+    elif tool_name == "gmail_read_message" and data.get("id"):
+        ids.append(email_id(data["id"]))
+    elif tool_name == "gmail_get_thread":
+        tid = data.get("id") or data.get("threadId")
+        if tid:
+            ids.append(thread_id(tid))
+        for m in data.get("messages", []) or []:
+            if m.get("id"):
+                ids.append(email_id(m["id"]))
+    elif tool_name in ("google_file_read", "google_file_metadata", "google_file_download"):
+        md = data.get("metadata") if isinstance(data.get("metadata"), dict) else data
+        fid = md.get("id") or md.get("file_id") or md.get("document_id")
+        if fid:
+            ids.append(drive_id(fid))
+    return ids
+
+
 def _mark_self(state, user_email: str) -> GraphNode | None:
     """Marca o nó person do usuário atual como 'Você' (Bloco 2). Retorna o nó p/ re-emitir."""
     email = (user_email or "").lower()
@@ -66,9 +90,9 @@ def _mark_self(state, user_email: str) -> GraphNode | None:
     return None
 
 
-async def _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry):
+async def _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry) -> None:
     """Fallback determinístico: para cada evento provisório, busca o dia no Calendar e abre o
-    evento correspondente (traz participantes). A reconciliação depois funde provisório→real."""
+    evento correspondente (traz participantes, em staging). A reconciliação funde provisório→real."""
     state = graph.get(user.email, conversation_id)
     cal_list = next((n for n, s in registry.service_name.items() if s == "calendar" and n == "calendar_event_list"), None)
     cal_get = next((n for n, s in registry.service_name.items() if s == "calendar" and n == "calendar_event_get"), None)
@@ -95,9 +119,12 @@ async def _enrich_provisional_events(user, settings, graph, conversation_id, tur
             for it in matches[:3]:
                 async with mcp_session(get_url, user.token, timeout=45) as s2:
                     ev = structured(await s2.call_tool("calendar_event_get", {"event_id": it["id"]}))
-                nodes, edges = extract_from_tool(state, "calendar", "calendar_event_get", ev, turn)
-                if nodes or edges:
-                    yield {"kind": "graph", "delta": delta_payload(nodes, edges, turn)}
+                nodes, _ = extract_from_tool(state, "calendar", "calendar_event_get", ev, turn)
+                for n in nodes:
+                    n.props["staged"] = True
+                for pid in _primary_ids("calendar_event_get", ev):  # evento real → via_get pelo id
+                    if pid in state.nodes:
+                        state.nodes[pid].props["via_get"] = True
         except Exception as e:  # noqa: BLE001
             logger.info("enriquecimento de calendar falhou: %s", str(e)[:120])
             return
@@ -161,12 +188,19 @@ async def _run_google_tool(user, settings, graph, conversation_id, turn, service
     if not data:
         data = {"_raw": text_content(res)[:2000]}
 
-    # Só leituras focadas (get/read) criam nós — buscas/listagens são apenas candidatos.
-    if creates_nodes(tool_name):
-        state = graph.get(user.email, conversation_id)
-        nodes, edges = extract_from_tool(state, service, tool_name, data, turn)
-        if nodes or edges:
-            yield {"kind": "graph", "delta": delta_payload(nodes, edges, turn)}
+    # Extrai para STAGING (props.staged=True): nada vai ao frontend agora. A promoção por
+    # evidência, no fim do turno, decide o que fica visível. Leituras focadas (get) marcam
+    # via_get=True (critério de promoção c).
+    state = graph.get(user.email, conversation_id)
+    nodes, _ = extract_from_tool(state, service, tool_name, data, turn)
+    for n in nodes:
+        n.props["staged"] = True
+    # via_get no(s) nó(s) PRIMÁRIO(s) buscado(s) — pelo id, existam eles ou não (o item pode já
+    # ter sido criado, em staging, por uma listagem anterior). Participantes de evento NÃO
+    # ganham via_get: passam pelo colapso.
+    for pid in _primary_ids(tool_name, data):
+        if pid in state.nodes:
+            state.nodes[pid].props["via_get"] = True
 
     # resultado enxuto para o LLM (só o necessário; evita corpos completos)
     compact = text_content(res) or json.dumps(data, ensure_ascii=False)
@@ -278,32 +312,36 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                     working.append({"role": "tool", "tool_call_id": tc["id"],
                                     "content": f"Ferramenta desconhecida: {name}."})
 
-        # Fim do turno (se houve uso de tools): enriquecimento, linkers, reconciliação.
+        # Fim do turno: promoção por evidência (o grafo mostra evidência, não exploração).
         if used_tools:
             state = graph.get(user.email, conversation_id)
+            before_visible = {n.id for n in state.nodes.values() if is_visible(n)}
 
-            # Enriquecimento determinístico: se há evento provisório (deduzido de nota do Gemini)
-            # e o Calendar está autorizado, busca o dia real p/ trazer o evento e participantes.
+            # Enriquecimento (staging): traz o evento real do dia p/ um provisório, se Calendar ok.
             calendar_ok = registry and any(v == "calendar" for v in registry.service_name.values())
             if calendar_ok and any(n.props.get("provisional") and n.type == "calendar_event"
                                    for n in state.nodes.values()):
-                async for out in _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry):
-                    if out["kind"] == "graph":
-                        yield sse("graph_delta", **out["delta"])
+                await _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry)
 
-            det = deterministic_links(state, turn, settings.time_window_days)
-            sem_nodes, sem_edges = await semantic_links(
+            # Reconciliação ANTES da promoção: funde provisório→real (reaponta notes_of) para a
+            # promoção ver o evento real já unificado.
+            _, removed = reconcile_provisionals(state, turn)
+            # Linker semântico (vê todos os nós, inclusive staging) → related_to, mentions e
+            # relevant_node_ids (promoção b).
+            sem_nodes, sem_edges, relevant_ids = await semantic_links(
                 client, model, state, turn, settings.semantic_linker_min_confidence,
                 answer_text=final_answer)
-            rec_edges, removed = reconcile_provisionals(state, turn)
-            self_node = _mark_self(state, user.email)  # Bloco 2: marca o nó "Você"
-            if self_node:
-                sem_nodes.append(self_node)
-            if det or sem_nodes or sem_edges or rec_edges or removed:
-                yield sse("graph_delta", **delta_payload(sem_nodes, det + sem_edges + rec_edges, turn, removed))
+            # Promoção por evidência + colapso de participantes.
+            promote(state, answer_text=final_answer, relevant_ids=relevant_ids, asked_text=user_message)
+            deterministic_links(state, turn, settings.time_window_days)
+            _mark_self(state, user.email)  # Bloco 2
 
-            # Bloco 5: sugestões a partir das lacunas do grafo.
-            sugg = build_suggestions(state, asked=asked_questions)
+            vis_nodes, vis_edges = visible_delta(state)
+            newly = [nid for nid in {n.id for n in vis_nodes} - before_visible]
+            yield sse("graph_delta", **delta_payload(vis_nodes, vis_edges, turn,
+                                                      removed_node_ids=removed, promoted_node_ids=newly))
+
+            sugg = build_suggestions(state, asked=asked_questions)  # Bloco 5: só nós visíveis
             if sugg:
                 yield sse("suggestions", suggestions=sugg)
     except Exception as e:  # noqa: BLE001
@@ -317,6 +355,6 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
         await anyio.to_thread.run_sync(store.add_message, user.email, conversation_id, "assistant", answer)
 
     graph_nodes = len([n for n in graph.get(user.email, conversation_id).nodes.values()
-                       if not n.props.get("is_self")])
+                       if is_visible(n) and not n.props.get("is_self")])
     trace_turn(model=model, question=user_message, tool_calls=tool_call_count, graph_nodes=graph_nodes)
     yield sse("done", conversation_id=conversation_id, model=model)

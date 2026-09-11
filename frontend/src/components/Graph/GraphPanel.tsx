@@ -11,9 +11,11 @@ const SELF_COLOR = "#005bbf";
 export function GraphPanel({
   graph,
   onAskAbout,
+  onPromote,
 }: {
   graph: GraphData;
   onAskAbout: (node: GraphNode) => void;
+  onPromote: (ids: string[]) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
@@ -160,8 +162,9 @@ export function GraphPanel({
                   const color = self ? SELF_COLOR : (nodeColors[node.type] ?? "#64748b");
                   const r = radiusOf(node.id) / scale;
 
-                  // pulso de destaque para nós do último turno
-                  if (node.first_seen_turn === graph.lastTurn && graph.lastTurn > 0 && Date.now() < highlightUntil.current) {
+                  // pulso de destaque para nós novos OU recém-promovidos
+                  const isNew = node.first_seen_turn === graph.lastTurn || graph.promoted.includes(node.id);
+                  if (isNew && Date.now() < highlightUntil.current) {
                     const pulse = 1 + 0.4 * Math.abs(Math.sin(Date.now() / 250));
                     ctx.beginPath(); ctx.arc(node.x, node.y, r * 1.6 * pulse, 0, 2 * Math.PI);
                     ctx.fillStyle = color + "22"; ctx.fill();
@@ -197,6 +200,17 @@ export function GraphPanel({
                   ctx.fillStyle = self ? "#94a3b8" : "#1a1f24";
                   ctx.textAlign = "center"; ctx.textBaseline = "middle";
                   ctx.fillText(label, node.x, ly);
+
+                  // badge "+N participantes" para eventos com participantes colapsados
+                  const staged = Number(node.props?.staged_participants || 0);
+                  if (node.type === "calendar_event" && staged > 0) {
+                    const bt = `+${staged}`; const bfs = 9 / scale;
+                    ctx.font = `${bfs}px system-ui`; const bw = ctx.measureText(bt).width + 6 / scale;
+                    const bx = node.x + r, by = node.y - r;
+                    ctx.fillStyle = "#64748b";
+                    ctx.beginPath(); ctx.roundRect(bx - bw / 2, by - bfs, bw, bfs + 3 / scale, 3 / scale); ctx.fill();
+                    ctx.fillStyle = "#fff"; ctx.fillText(bt, bx, by - bfs / 2 + 1 / scale);
+                  }
                 }}
                 nodePointerAreaPaint={(node: any, color, ctx, scale) => {
                   ctx.fillStyle = color; ctx.beginPath();
@@ -211,6 +225,7 @@ export function GraphPanel({
               {selected && (
                 <NodeDetail node={selected} graph={graph}
                   onAskAbout={(n) => { onAskAbout(n); setSelected(null); }}
+                  onPromote={onPromote}
                   onClose={() => setSelected(null)} />
               )}
             </>

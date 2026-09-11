@@ -46,3 +46,13 @@ export async function getConversation(id: string): Promise<StoredMessage[]> {
 export async function deleteConversation(id: string): Promise<void> {
   await fetch(`/api/conversations/${encodeURIComponent(id)}/reset`, { method: "POST" });
 }
+
+export async function promoteGraphNodes(conversationId: string, nodeIds: string[]): Promise<any> {
+  const res = await fetch("/api/graph/promote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversation_id: conversationId, node_ids: nodeIds }),
+  });
+  if (!res.ok) throw new Error(`promote falhou: ${res.status}`);
+  return res.json();
+}
