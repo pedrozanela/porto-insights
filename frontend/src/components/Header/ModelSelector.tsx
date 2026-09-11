@@ -12,6 +12,8 @@ export function ModelSelector({ models, value, onChange }: Props) {
     <label className="flex items-center gap-2 text-sm">
       <span className="text-muted">Modelo</span>
       <select
+        id="model-selector"
+        name="model"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={models.length === 0}

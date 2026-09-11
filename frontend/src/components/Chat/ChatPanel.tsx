@@ -11,7 +11,7 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-        <h1 className="text-2xl font-semibold text-textc">Bom dia 👋</h1>
+        <h1 className="text-2xl font-semibold text-textc">Como posso ajudar?</h1>
         <p className="mt-2 max-w-md text-muted">
           Pergunte sobre sua agenda, emails, documentos e os dados do Porto Bank. As conexões
           entre eles aparecem no grafo ao lado.
@@ -31,6 +31,8 @@ export function ChatPanel() {
       <div className="border-t border-borderc bg-surface p-4">
         <div className="flex items-center gap-2 rounded-xl border border-borderc px-4 py-2">
           <input
+            id="chat-input"
+            name="pergunta"
             type="text"
             placeholder="Escreva sua pergunta…"
             className="flex-1 bg-transparent text-textc outline-none placeholder:text-muted"
