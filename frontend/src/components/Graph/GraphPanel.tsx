@@ -67,25 +67,31 @@ export function GraphPanel({ graph }: { graph: GraphData }) {
               linkDirectionalArrowLength={4}
               linkDirectionalArrowRelPos={1}
               cooldownTicks={80}
-              onEngineStop={() => fgRef.current?.zoomToFit(400, 50)}
+              maxZoom={4}
+              onEngineStop={() => fgRef.current?.zoomToFit(400, 60)}
               nodeCanvasObject={(node: any, ctx, scale) => {
+                // Tamanhos constantes em pixels (÷ scale), para não incharem quando o zoom sobe.
                 const color = nodeColors[node.type] ?? "#64748b";
-                const r = 6;
+                const r = 6 / scale;
                 ctx.beginPath();
                 ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
                 ctx.fillStyle = color;
                 ctx.fill();
                 const label = String(node.label ?? "");
-                const fontSize = Math.max(10 / scale, 3);
+                const fontSize = 11 / scale;
                 ctx.font = `${fontSize}px system-ui`;
                 ctx.fillStyle = "#1a1f24";
                 ctx.textBaseline = "middle";
-                ctx.fillText(label.length > 22 ? label.slice(0, 22) + "…" : label, node.x + r + 2, node.y);
+                ctx.fillText(
+                  label.length > 22 ? label.slice(0, 22) + "…" : label,
+                  node.x + r + 3 / scale,
+                  node.y,
+                );
               }}
-              nodePointerAreaPaint={(node: any, color, ctx) => {
+              nodePointerAreaPaint={(node: any, color, ctx, scale) => {
                 ctx.fillStyle = color;
                 ctx.beginPath();
-                ctx.arc(node.x, node.y, 8, 0, 2 * Math.PI);
+                ctx.arc(node.x, node.y, 8 / scale, 0, 2 * Math.PI);
                 ctx.fill();
               }}
             />
