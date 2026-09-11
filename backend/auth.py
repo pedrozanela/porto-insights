@@ -55,9 +55,10 @@ def get_user_context(request: Request) -> UserContext:
     token = request.headers.get(ACCESS_TOKEN_HEADER)
 
     if token:
-        # Produção: OBO. Identidade preferencialmente por current_user.me() (fonte confiável),
-        # caindo para os headers x-forwarded-* como atalho.
-        wsc = WorkspaceClient(host=s.host_url, token=token)
+        # Produção: OBO. auth_type="pat" força o uso do token do usuário e ignora o OAuth do
+        # service principal do app (DATABRICKS_CLIENT_ID/SECRET no ambiente) — senão o SDK
+        # recusa com "more than one authorization method configured: oauth and pat".
+        wsc = WorkspaceClient(host=s.host_url, token=token, auth_type="pat")
         email = request.headers.get(EMAIL_HEADER) or request.headers.get(USER_HEADER) or ""
         if not email:
             try:
