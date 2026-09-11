@@ -2,16 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Tokens espelhados de src/theme.ts. TODO: hex oficiais Porto. */
+/* Tokens de marca da Porto (oficiais, do app ai-prism-porto). Espelhados em src/theme.ts.
+   Azul da vela = #00a1fc; primary usa o azul profundo #005bbf para contraste de texto branco. */
 :root {
-  --color-primary: #1B4A9C;
-  --color-primary-dark: #0F2F63;
-  --color-accent: #2E86DE;
+  --color-primary: #005bbf;       /* azul Porto profundo — botões, links, estados selecionados */
+  --color-primary-dark: #00408c;  /* hover/pressed */
+  --color-accent: #00a1fc;        /* azul da vela — acento de marca, destaques */
   --color-surface: #FFFFFF;
-  --color-surface-muted: #F5F7FA;
-  --color-border: #E3E8EF;
-  --color-text: #1A2332;
-  --color-muted: #6B7688;
+  --color-surface-muted: #F7F8FA;
+  --color-border: #E2E6EA;
+  --color-text: #1A1F24;
+  --color-muted: #5C6670;
 }
 
 html, body, #root { height: 100%; }
