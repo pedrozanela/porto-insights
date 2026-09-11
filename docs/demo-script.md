@@ -8,9 +8,11 @@ efeito "uau".
 
 ## Passos
 
-1. **"O que eu tenho na agenda amanhã?"**
-   → Lista os eventos de amanhã (incluindo o *Comitê de Crédito PJ*). No grafo surgem nós de
-   **evento** e **pessoas** (os convidados).
+1. **"Qual é a reunião do Comitê de Crédito PJ amanhã e quem participa?"**
+   → O agente abre o evento (não só lista a agenda) e traz os participantes. No grafo surgem o
+   nó do **evento** e das **pessoas** convidadas.
+   > O grafo materializa o que a conversa **abre** — buscas amplas não poluem com dezenas de
+   > hits. Por isso o abridor pede um item específico (a reunião), não "toda a agenda".
 
 2. **"Tem algum email relacionado ao Comitê de Crédito PJ?"**
    → Traz a thread de email. No grafo aparecem **emails** e **threads**, e arestas ligando às

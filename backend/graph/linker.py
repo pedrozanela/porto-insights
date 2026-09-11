@@ -23,6 +23,21 @@ from .schema import GraphEdge, GraphState
 logger = logging.getLogger("porto_insights.graph.linker")
 
 
+# Só estas tools criam nós no grafo: leituras "focadas" de um item específico. Buscas/listagens
+# (gmail_search, google_drive_search, calendar_event_list, ...) NÃO criam nós — servem só de
+# candidatos para o modelo. Assim o grafo reflete o que a conversa de fato abriu, sem poluir com
+# dezenas de hits de busca irrelevantes. (Nós de dados vêm à parte, das citações do Genie.)
+NODE_CREATING_TOOLS = {
+    "gmail_read_message", "gmail_get_thread",
+    "calendar_event_get",
+    "google_file_read", "google_file_metadata", "google_file_download",
+}
+
+
+def creates_nodes(tool_name: str) -> bool:
+    return tool_name in NODE_CREATING_TOOLS
+
+
 def extract_from_tool(state: GraphState, service: str, tool_name: str, result: dict, turn: int):
     """Roteia o resultado de uma tool do Google para o extractor certo."""
     if service == "gmail":

@@ -19,7 +19,7 @@ from ..config import Settings
 from ..genie.client import run_genie_ask
 from ..genie.composite import GENIE_TOOL, card_payload, compact_result_for_llm
 from ..graph.extractors.genie import extract_genie
-from ..graph.linker import deterministic_links, extract_from_tool, semantic_links
+from ..graph.linker import creates_nodes, deterministic_links, extract_from_tool, semantic_links
 from ..graph.schema import delta_payload
 from ..graph.store import GraphStore
 from ..llm import build_async_client, stream_turn
@@ -108,10 +108,12 @@ async def _run_google_tool(user, settings, graph, conversation_id, turn, service
     if not data:
         data = {"_raw": text_content(res)[:2000]}
 
-    state = graph.get(user.email, conversation_id)
-    nodes, edges = extract_from_tool(state, service, tool_name, data, turn)
-    if nodes or edges:
-        yield {"kind": "graph", "delta": delta_payload(nodes, edges, turn)}
+    # Só leituras focadas (get/read) criam nós — buscas/listagens são apenas candidatos.
+    if creates_nodes(tool_name):
+        state = graph.get(user.email, conversation_id)
+        nodes, edges = extract_from_tool(state, service, tool_name, data, turn)
+        if nodes or edges:
+            yield {"kind": "graph", "delta": delta_payload(nodes, edges, turn)}
 
     # resultado enxuto para o LLM (só o necessário; evita corpos completos)
     compact = text_content(res) or json.dumps(data, ensure_ascii=False)

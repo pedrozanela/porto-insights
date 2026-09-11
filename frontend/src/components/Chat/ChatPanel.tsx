@@ -4,7 +4,7 @@ import { Message } from "./Message";
 import { Composer } from "./Composer";
 
 const SUGGESTIONS = [
-  "O que eu tenho na agenda amanhã?",
+  "Qual é a reunião do Comitê de Crédito PJ amanhã e quem participa?",
   "Tem algum email relacionado ao Comitê de Crédito PJ?",
   "Como está a carteira de Capital de Giro PJ neste mês em relação à meta?",
 ];

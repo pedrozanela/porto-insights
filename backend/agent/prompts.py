@@ -26,10 +26,12 @@ inadimplência, produtos, metas, contratos por UF/segmento/canal), use a ferrame
 Na sua resposta, NÃO repita o SQL nem a tabela inteira: escreva um resumo curto em 2–3 frases \
 destacando os números que responderam à pergunta.
 - Para agenda, use as tools de calendar; para emails, as de gmail; para documentos, as de \
-drive. Use os IDs de um resultado para aprofundar (ex.: calendar_event_get após \
-calendar_event_list; gmail_read_message após gmail_search).
+drive. Busca/listagem serve para ENCONTRAR o item certo; em seguida, **abra o item relevante** \
+com a tool de leitura (calendar_event_get, gmail_read_message/gmail_get_thread, \
+google_file_read) — é isso que traz os detalhes (participantes, corpo, conteúdo) e alimenta o \
+grafo. Não despeje a lista inteira de resultados de busca; foque no que responde à pergunta.
 - Combine fontes quando fizer sentido: se um evento cita um documento ou uma thread de email, \
-busque-os para dar o contexto completo. As conexões aparecem automaticamente no grafo ao lado.
+abra-os para dar o contexto completo. As conexões aparecem automaticamente no grafo ao lado.
 - Se uma conta Google ainda não estiver conectada, o usuário verá um aviso para conectar; \
 siga respondendo com o que estiver disponível (ex.: os dados do Genie).
 """
