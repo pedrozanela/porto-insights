@@ -9,16 +9,28 @@ import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
+from .agent.loop import run_turn
 from .auth import UserContext, get_user_context
 from .config import get_settings
+from .store.memory import InMemoryConversationStore
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 app = FastAPI(title="Porto Insights", docs_url=None, redoc_url=None)
+
+# POC: store em memória por sessão, atrás da interface ConversationStore (troca por Lakebase depois).
+store = InMemoryConversationStore()
+
+
+class ChatRequest(BaseModel):
+    conversation_id: str
+    message: str
+    model: str = ""
 
 # dist/ do frontend (buildado antes do deploy). Em dev antes do 1º build pode não existir.
 DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
@@ -40,6 +52,24 @@ def me(user: UserContext = Depends(get_user_context)) -> dict:
         "default_model": settings.default_endpoint,
         "google_services": settings.google_services,
     }
+
+
+@app.post("/api/chat")
+def chat(req: ChatRequest, user: UserContext = Depends(get_user_context)) -> StreamingResponse:
+    """Um turno de conversa, streamado como SSE. Toda chamada de modelo usa o token do usuário."""
+    generator = run_turn(user, settings, store, req.conversation_id, req.message, req.model)
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/conversations/{conversation_id}/reset")
+def reset_conversation(conversation_id: str, user: UserContext = Depends(get_user_context)) -> dict:
+    """Limpa a conversa (mensagens + fio do Genie). Usado pelo botão 'Nova conversa'."""
+    store.reset(user.email, conversation_id)
+    return {"status": "ok"}
 
 
 # --- Arquivos estáticos do frontend (registrado por último; não intercepta /api/*) ---

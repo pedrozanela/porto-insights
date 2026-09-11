@@ -13,6 +13,7 @@ export default {
         borderc: "var(--color-border)",
         textc: "var(--color-text)",
         muted: "var(--color-muted)",
+        bubbleUser: "var(--color-bubble-user)",
       },
       fontFamily: {
         // Inter é adicionada (self-hosted) numa fase posterior; fallback de sistema por ora.

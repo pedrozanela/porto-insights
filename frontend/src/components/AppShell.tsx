@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchMe, type MeResponse } from "../api/client";
+import { useConversation } from "../state/useConversation";
 import { Header } from "./Header/Header";
 import { ChatPanel } from "./Chat/ChatPanel";
 import { GraphPanel } from "./Graph/GraphPanel";
@@ -8,6 +9,7 @@ export function AppShell() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const conv = useConversation();
 
   useEffect(() => {
     fetchMe()
@@ -19,7 +21,7 @@ export function AppShell() {
   }, []);
 
   const newConversation = () => {
-    // Fase 1: sem estado de conversa ainda. Placeholder para o botão do header.
+    void conv.reset();
   };
 
   return (
@@ -39,7 +41,13 @@ export function AppShell() {
       )}
       <main className="grid flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[1fr_45%]">
         <section className="min-h-0 border-r border-borderc bg-surfaceMuted">
-          <ChatPanel />
+          <ChatPanel
+            messages={conv.messages}
+            streaming={conv.streaming}
+            warning={conv.warning}
+            error={conv.error}
+            onSend={(text) => conv.send(text, selectedModel)}
+          />
         </section>
         <aside className="hidden min-h-0 lg:block">
           <GraphPanel />
