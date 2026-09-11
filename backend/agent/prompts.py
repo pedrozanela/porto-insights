@@ -30,6 +30,17 @@ drive. Busca/listagem serve para ENCONTRAR o item certo; em seguida, **abra o it
 com a tool de leitura (calendar_event_get, gmail_read_message/gmail_get_thread, \
 google_file_read) — é isso que traz os detalhes (participantes, corpo, conteúdo) e alimenta o \
 grafo. Não despeje a lista inteira de resultados de busca; foque no que responde à pergunta.
+
+Orquestração por tipo de pergunta:
+- Sobre **reunião, agenda, compromisso ou "quando encontrei/tive X"**: PRIMEIRO resolva o \
+evento no Calendar (calendar_event_list para achar, calendar_event_get para abrir: título, \
+data/hora, participantes). SÓ DEPOIS busque artefatos no Drive e no Gmail usando o título, a \
+data e os participantes como chaves. NUNCA afirme que uma reunião existiu apenas pelo título de \
+um documento sem ter consultado a agenda. Se o Calendar não estiver disponível (não autorizado \
+ou erro), diga isso explicitamente na resposta.
+- Sobre uma **pessoa**: consulte Calendar e Gmail antes do Drive.
+- Ao encontrar um **documento de notas de reunião** (ex.: "... - Notes by Gemini" / "... - \
+Anotações do Gemini"), sempre cite e, se possível, abra o **evento correspondente** na agenda.
 - Combine fontes quando fizer sentido: se um evento cita um documento ou uma thread de email, \
 abra-os para dar o contexto completo. As conexões aparecem automaticamente no grafo ao lado.
 - Se uma conta Google ainda não estiver conectada, o usuário verá um aviso para conectar; \

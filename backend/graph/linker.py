@@ -15,10 +15,10 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 from .extractors.calendar import extract_calendar
-from .extractors.common import drive_id, extract_drive_ids
+from .extractors.common import drive_id, extract_drive_ids, normalize_title, provisional_person_id
 from .extractors.drive import extract_drive
 from .extractors.gmail import extract_gmail
-from .schema import GraphEdge, GraphState
+from .schema import GraphEdge, GraphNode, GraphState
 
 logger = logging.getLogger("porto_insights.graph.linker")
 
@@ -109,50 +109,126 @@ def deterministic_links(state: GraphState, turn: int, time_window_days: int) -> 
     return added
 
 
-SEMANTIC_PROMPT = """\
-Você conecta um grafo de conhecimento. Recebe uma lista de NÓS existentes (id, tipo, rótulo).
-Proponha arestas do tipo "related_to" entre nós que tratam do MESMO assunto/tema e que ainda
-não estariam obviamente ligados (ex.: uma reunião e uma resposta de dados sobre o tema dela).
+def reconcile_provisionals(state: GraphState, turn: int) -> tuple[list[GraphEdge], list[str]]:
+    """Funde nós provisórios nos reais equivalentes. Retorna (arestas novas, ids removidos).
+    - evento provisório → evento real: mesmo título normalizado e start em ±15 min.
+    - pessoa provisória → pessoa real: mesmo nome normalizado."""
+    added: list[GraphEdge] = []
+    removed: list[str] = []
 
-Regras:
-- Use SOMENTE os ids fornecidos. NÃO invente nós.
-- Cada aresta: {"source": id, "target": id, "confidence": 0..1, "rationale": "motivo curto em pt-BR"}.
-- Só proponha o que tiver relação real e clara. Prefira poucas arestas de alta confiança.
-- Responda APENAS um JSON: {"edges": [...]}.
+    events = [n for n in state.nodes.values() if n.type == "calendar_event"]
+    provis_ev = [n for n in events if n.props.get("provisional")]
+    real_ev = [n for n in events if not n.props.get("provisional")]
+    for p in provis_ev:
+        p_norm = normalize_title(p.props.get("summary") or p.label)
+        p_dt = _parse_dt(p.props.get("start"))
+        for r in real_ev:
+            if normalize_title(r.props.get("summary") or r.label) != p_norm:
+                continue
+            r_dt = _parse_dt(r.props.get("start"))
+            close = True
+            if p_dt and r_dt:
+                close = abs((p_dt - r_dt).total_seconds()) <= 15 * 60
+            if close:
+                edges, rem = state.merge_node(p.id, r.id)
+                added += edges
+                if rem:
+                    removed.append(rem)
+                break
+
+    persons = [n for n in state.nodes.values() if n.type == "person"]
+    provis_p = [n for n in persons if n.props.get("provisional")]
+    real_p = [n for n in persons if not n.props.get("provisional")]
+    for p in provis_p:
+        p_norm = normalize_title(p.label)
+        for r in real_p:
+            if normalize_title(r.label) == p_norm:
+                edges, rem = state.merge_node(p.id, r.id)
+                added += edges
+                if rem:
+                    removed.append(rem)
+                break
+    return added, removed
+
+
+SEMANTIC_PROMPT = """\
+Você conecta um grafo de conhecimento. Recebe NÓS existentes (id, tipo, rótulo) e o TEXTO da
+resposta dada ao usuário neste turno. Faça duas coisas:
+
+1) related_to: arestas entre nós existentes que tratam do MESMO assunto e que ainda não
+   estariam obviamente ligados (ex.: uma reunião e uma resposta de dados sobre o tema dela).
+   Cada uma: {"source": id, "target": id, "confidence": 0..1, "rationale": "motivo curto pt-BR"}.
+
+2) mentions: NOMES DE PESSOAS citados no texto que NÃO estão entre os nós (ex.: alguém mencionado
+   no resumo de um documento). Cada uma: {"name": "Nome Sobrenome", "in_node": id_do_no_de_conteudo,
+   "confidence": 0..1}. APENAS pessoas reais (não empresas, produtos, times ou lugares).
+
+Regras: use SOMENTE ids fornecidos em `source`/`target`/`in_node`; não invente ids. Prefira poucas
+propostas de alta confiança. Responda APENAS um JSON: {"edges": [...], "mentions": [...]}.
 
 NÓS:
 """
 
 
-async def semantic_links(client, model: str, state: GraphState, turn: int, min_confidence: float) -> list[GraphEdge]:
-    """Chamada enxuta ao LLM propondo arestas related_to entre nós existentes."""
+def _find_person_by_name(state: GraphState, name: str) -> GraphNode | None:
+    norm = normalize_title(name)
+    for n in state.nodes.values():
+        if n.type == "person" and normalize_title(n.label) == norm:
+            return n
+    return None
+
+
+async def semantic_links(
+    client, model: str, state: GraphState, turn: int, min_confidence: float,
+    *, answer_text: str = "", mention_min_conf: float = 0.7,
+) -> tuple[list[GraphNode], list[GraphEdge]]:
+    """LLM propõe related_to (entre nós) e mentions (pessoas provisórias citadas no texto).
+    Retorna (nós novos, arestas novas)."""
     nodes = list(state.nodes.values())
-    if len(nodes) < 2:
-        return []
+    if len(nodes) < 2 and not answer_text:
+        return [], []
     listing = "\n".join(f'- {{"id": "{n.id}", "tipo": "{n.type}", "rotulo": "{n.label[:50]}"}}' for n in nodes)
+    prompt = SEMANTIC_PROMPT + listing + f"\n\nTEXTO DA RESPOSTA:\n{answer_text[:2000]}"
     try:
         resp = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": SEMANTIC_PROMPT + listing}],
-            max_tokens=600,
-        )
+            model=model, messages=[{"role": "user", "content": prompt}], max_tokens=700)
         content = resp.choices[0].message.content or "{}"
         content = content[content.find("{"): content.rfind("}") + 1] or "{}"
-        proposed = json.loads(content).get("edges", [])
+        data = json.loads(content)
     except Exception as e:  # noqa: BLE001
         logger.info("semantic linker falhou/sem saída: %s", str(e)[:100])
-        return []
+        return [], []
 
-    added: list[GraphEdge] = []
-    for p in proposed:
+    added_nodes: list[GraphNode] = []
+    added_edges: list[GraphEdge] = []
+
+    for p in data.get("edges", []) or []:
         src, tgt = p.get("source"), p.get("target")
         conf = float(p.get("confidence", 0) or 0)
         if src not in state.nodes or tgt not in state.nodes or src == tgt or conf < min_confidence:
             continue
         e = state.add_edge(GraphEdge(
             id=GraphState.edge_id(src, "related_to", tgt), source=src, target=tgt, type="related_to",
-            first_seen_turn=turn, weight=conf, confidence=conf, rationale=(p.get("rationale") or "")[:200],
-        ))
+            first_seen_turn=turn, weight=conf, confidence=conf, rationale=(p.get("rationale") or "")[:200]))
         if e:
-            added.append(e)
-    return added
+            added_edges.append(e)
+
+    for m in data.get("mentions", []) or []:
+        name = (m.get("name") or "").strip()
+        in_node = m.get("in_node")
+        conf = float(m.get("confidence", 0) or 0)
+        if not name or conf < mention_min_conf or in_node not in state.nodes:
+            continue
+        existing = _find_person_by_name(state, name)  # se já há pessoa (real/provisória), reusa
+        pid = existing.id if existing else provisional_person_id(name)
+        if not existing:
+            n = state.add_node(GraphNode(id=pid, type="person", label=name, source="genie",
+                                         first_seen_turn=turn, props={"provisional": True, "mentioned": True}))
+            if n:
+                added_nodes.append(n)
+        e = state.add_edge(GraphEdge(
+            id=GraphState.edge_id(in_node, "mentions", pid), source=in_node, target=pid, type="mentions",
+            first_seen_turn=turn, weight=0.3, confidence=conf, evidence=["citado no conteúdo"]))
+        if e:
+            added_edges.append(e)
+    return added_nodes, added_edges

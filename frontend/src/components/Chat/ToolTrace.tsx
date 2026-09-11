@@ -18,6 +18,13 @@ export function ToolTrace({ trace }: { trace: Trace }) {
         </span>
         <span className="text-xs">{open ? "ocultar" : "ver passos"}</span>
       </button>
+      {trace.narrations.length > 0 && (
+        <div className="mt-1.5 space-y-0.5">
+          {trace.narrations.map((n, i) => (
+            <p key={i} className="text-xs italic text-muted">{n}</p>
+          ))}
+        </div>
+      )}
       {open && trace.steps.length > 0 && (
         <ol className="mt-2 space-y-1 border-l border-borderc pl-3">
           {trace.steps.map((s, i) => (

@@ -32,8 +32,11 @@ export function NodeDetail({ node, graph, onAskAbout, onClose }: Props) {
         <div>
           <div className="text-xs uppercase tracking-wide text-muted">
             {nodeLabels[node.type] ?? node.type} · {SOURCE_LABEL[node.source] ?? node.source}
+            {node.props?.provisional ? " · inferido" : ""}
           </div>
-          <div className="mt-0.5 font-semibold text-textc">{node.label}</div>
+          <div className="mt-0.5 font-semibold text-textc">
+            {String(node.props?.title || node.label)}
+          </div>
         </div>
         <button onClick={onClose} className="text-muted hover:text-textc" title="Fechar">✕</button>
       </div>

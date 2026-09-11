@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ChatMessage } from "../../state/types";
+import type { ChatMessage, Suggestion } from "../../state/types";
 import { Message } from "./Message";
 import { Composer } from "./Composer";
 
@@ -14,10 +14,11 @@ interface Props {
   streaming: boolean;
   warning: string | null;
   error: string | null;
+  suggestions: Suggestion[];
   onSend: (text: string) => void;
 }
 
-export function ChatPanel({ messages, streaming, warning, error, onSend }: Props) {
+export function ChatPanel({ messages, streaming, warning, error, suggestions, onSend }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -56,6 +57,20 @@ export function ChatPanel({ messages, streaming, warning, error, onSend }: Props
             <div className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>
           )}
           <div ref={bottomRef} />
+        </div>
+      )}
+      {!empty && suggestions.length > 0 && !streaming && (
+        <div className="flex flex-wrap gap-2 border-t border-borderc bg-surfaceMuted px-4 pt-3">
+          {suggestions.map((s) => (
+            <button
+              key={s.prompt}
+              onClick={() => onSend(s.prompt)}
+              className="rounded-full border border-borderc bg-surface px-3 py-1.5 text-xs text-textc shadow-soft hover:border-primary hover:text-primary"
+              title={s.prompt}
+            >
+              {s.label}
+            </button>
+          ))}
         </div>
       )}
       <Composer onSend={onSend} disabled={streaming} />

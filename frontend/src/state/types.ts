@@ -23,7 +23,14 @@ export interface GenieCard {
 export interface ToolTrace {
   label: string;
   steps: string[];
+  narrations: string[]; // texto que o modelo produziu ANTES de uma tool (narração, não resposta)
   done: boolean;
+}
+
+export interface Suggestion {
+  label: string;
+  prompt: string;
+  node_id: string;
 }
 
 export interface AuthRequired {

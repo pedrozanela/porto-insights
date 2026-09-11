@@ -19,8 +19,11 @@ from ..config import Settings
 from ..genie.client import run_genie_ask
 from ..genie.composite import GENIE_TOOL, card_payload, compact_result_for_llm
 from ..graph.extractors.genie import extract_genie
-from ..graph.linker import creates_nodes, deterministic_links, extract_from_tool, semantic_links
-from ..graph.schema import delta_payload
+from ..graph.linker import (
+    creates_nodes, deterministic_links, extract_from_tool, reconcile_provisionals, semantic_links,
+)
+from ..graph.schema import GraphNode, delta_payload
+from ..graph.suggestions import build_suggestions
 from ..graph.store import GraphStore
 from ..llm import build_async_client, stream_turn
 from ..mcp.client import mcp_session, structured, text_content
@@ -48,6 +51,56 @@ def _resolve_model(settings: Settings, requested: str) -> tuple[str, str | None]
 def _looks_like_auth_error(msg: str) -> bool:
     m = msg.lower()
     return any(h in m for h in AUTH_HINTS)
+
+
+def _mark_self(state, user_email: str) -> GraphNode | None:
+    """Marca o nó person do usuário atual como 'Você' (Bloco 2). Retorna o nó p/ re-emitir."""
+    email = (user_email or "").lower()
+    for n in state.nodes.values():
+        if n.type == "person" and str(n.props.get("email", "")).lower() == email and email:
+            if not n.props.get("is_self"):
+                n.props["is_self"] = True
+                n.label = "Você"
+                return n
+            return None
+    return None
+
+
+async def _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry):
+    """Fallback determinístico: para cada evento provisório, busca o dia no Calendar e abre o
+    evento correspondente (traz participantes). A reconciliação depois funde provisório→real."""
+    state = graph.get(user.email, conversation_id)
+    cal_list = next((n for n, s in registry.service_name.items() if s == "calendar" and n == "calendar_event_list"), None)
+    cal_get = next((n for n, s in registry.service_name.items() if s == "calendar" and n == "calendar_event_get"), None)
+    if not (cal_list and cal_get):
+        return
+    from ..graph.extractors.common import normalize_title
+    url = registry.service_url.get(cal_list)
+    get_url = registry.service_url.get(cal_get)
+    provisionals = [n for n in state.nodes.values()
+                    if n.type == "calendar_event" and n.props.get("provisional") and n.props.get("start")]
+    # mapa dia -> títulos normalizados que queremos casar (só abrimos eventos que casam)
+    want: dict[str, set[str]] = {}
+    for p in provisionals[:3]:
+        want.setdefault(str(p.props["start"])[:10], set()).add(normalize_title(p.props.get("summary") or p.label))
+    for day, titles in list(want.items())[:2]:  # no máximo 2 dias
+        try:
+            async with mcp_session(url, user.token, timeout=45) as s:
+                res = await s.call_tool("calendar_event_list",
+                                        {"time_min": f"{day}T00:00:00-03:00", "time_max": f"{day}T23:59:59-03:00",
+                                         "query": "", "max_results": 30})
+            items = structured(res).get("items") or []
+            # abre APENAS os eventos cujo título casa com um provisório (cirúrgico, sem ruído)
+            matches = [it for it in items if it.get("id") and normalize_title(it.get("summary", "")) in titles]
+            for it in matches[:3]:
+                async with mcp_session(get_url, user.token, timeout=45) as s2:
+                    ev = structured(await s2.call_tool("calendar_event_get", {"event_id": it["id"]}))
+                nodes, edges = extract_from_tool(state, "calendar", "calendar_event_get", ev, turn)
+                if nodes or edges:
+                    yield {"kind": "graph", "delta": delta_payload(nodes, edges, turn)}
+        except Exception as e:  # noqa: BLE001
+            logger.info("enriquecimento de calendar falhou: %s", str(e)[:120])
+            return
 
 
 async def _run_genie_tool(user, settings, store, graph, conversation_id, turn, question, follow_up):
@@ -130,6 +183,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
     history = await anyio.to_thread.run_sync(store.get_messages, user.email, conversation_id)
     await anyio.to_thread.run_sync(store.add_message, user.email, conversation_id, "user", user_message)
     turn = len([m for m in history if m.role == "user"]) + 1
+    asked_questions = {m.content for m in history if m.role == "user"} | {user_message}
 
     yield sse("turn_start", conversation_id=conversation_id, model=model, turn=turn)
     if warning:
@@ -156,7 +210,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
     working.append({"role": "user", "content": user_message})
 
     client = build_async_client(settings.host_url, user.token)
-    full_answer_parts: list[str] = []
+    final_answer = ""  # só a resposta do turno (não a narração pré-tool) é persistida
     used_tools = False
     tool_call_count = 0
 
@@ -166,12 +220,14 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
             tool_calls = []
             async for ev in stream_turn(client, model, working, tools=tools):
                 if ev["type"] == "token":
-                    full_answer_parts.append(ev["text"])
+                    # Tokens são streamados ao vivo. Se este trecho preceder uma tool_call, é
+                    # NARRAÇÃO: o frontend o move para o trace quando o tool_call_start chega.
                     yield sse("token", text=ev["text"])
                 elif ev["type"] == "complete":
                     content, tool_calls = ev["content"], ev["tool_calls"]
 
             if not tool_calls:
+                final_answer = content  # só a última iteração (sem tool) é a resposta
                 break
 
             used_tools = True
@@ -222,23 +278,45 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                     working.append({"role": "tool", "tool_call_id": tc["id"],
                                     "content": f"Ferramenta desconhecida: {name}."})
 
-        # Linkers ao fim do turno (se houve uso de tools): determinístico + semântico.
+        # Fim do turno (se houve uso de tools): enriquecimento, linkers, reconciliação.
         if used_tools:
             state = graph.get(user.email, conversation_id)
+
+            # Enriquecimento determinístico: se há evento provisório (deduzido de nota do Gemini)
+            # e o Calendar está autorizado, busca o dia real p/ trazer o evento e participantes.
+            calendar_ok = registry and any(v == "calendar" for v in registry.service_name.values())
+            if calendar_ok and any(n.props.get("provisional") and n.type == "calendar_event"
+                                   for n in state.nodes.values()):
+                async for out in _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry):
+                    if out["kind"] == "graph":
+                        yield sse("graph_delta", **out["delta"])
+
             det = deterministic_links(state, turn, settings.time_window_days)
-            sem = await semantic_links(client, model, state, turn, settings.semantic_linker_min_confidence)
-            if det or sem:
-                yield sse("graph_delta", **delta_payload([], det + sem, turn))
+            sem_nodes, sem_edges = await semantic_links(
+                client, model, state, turn, settings.semantic_linker_min_confidence,
+                answer_text=final_answer)
+            rec_edges, removed = reconcile_provisionals(state, turn)
+            self_node = _mark_self(state, user.email)  # Bloco 2: marca o nó "Você"
+            if self_node:
+                sem_nodes.append(self_node)
+            if det or sem_nodes or sem_edges or rec_edges or removed:
+                yield sse("graph_delta", **delta_payload(sem_nodes, det + sem_edges + rec_edges, turn, removed))
+
+            # Bloco 5: sugestões a partir das lacunas do grafo.
+            sugg = build_suggestions(state, asked=asked_questions)
+            if sugg:
+                yield sse("suggestions", suggestions=sugg)
     except Exception as e:  # noqa: BLE001
         logger.exception("erro no turno (modelo=%s)", model)
         yield sse("error", message=f"Não consegui concluir a resposta com o modelo {model}. "
                   "Tente novamente ou troque de modelo.", detail=str(e)[:200])
         return
 
-    answer = "".join(full_answer_parts).strip()
+    answer = final_answer.strip()
     if answer:
         await anyio.to_thread.run_sync(store.add_message, user.email, conversation_id, "assistant", answer)
 
-    graph_nodes = len(graph.get(user.email, conversation_id).nodes)
+    graph_nodes = len([n for n in graph.get(user.email, conversation_id).nodes.values()
+                       if not n.props.get("is_self")])
     trace_turn(model=model, question=user_message, tool_calls=tool_call_count, graph_nodes=graph_nodes)
     yield sse("done", conversation_id=conversation_id, model=model)

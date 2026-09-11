@@ -54,6 +54,7 @@ export function AppShell() {
             streaming={conv.streaming}
             warning={conv.warning}
             error={conv.error}
+            suggestions={conv.suggestions}
             onSend={(text) => conv.send(text, selectedModel)}
           />
         </section>

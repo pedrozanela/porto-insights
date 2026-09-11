@@ -65,10 +65,40 @@ class GraphState:
     def edge_id(source: str, etype: str, target: str) -> str:
         return f"{source}|{etype}|{target}"
 
+    def remove_node(self, node_id: str) -> None:
+        """Remove um nó e todas as arestas que o tocam."""
+        self.nodes.pop(node_id, None)
+        for eid in [e.id for e in self.edges.values() if e.source == node_id or e.target == node_id]:
+            self.edges.pop(eid, None)
+        for k, v in list(self.last_genie_answer.items()):
+            if v == node_id:
+                del self.last_genie_answer[k]
 
-def delta_payload(added_nodes: list[GraphNode], added_edges: list[GraphEdge], turn: int) -> dict:
+    def merge_node(self, from_id: str, to_id: str) -> tuple[list["GraphEdge"], str | None]:
+        """Funde `from_id` em `to_id`: reaponta as arestas e remove o `from_id`.
+        Retorna (arestas novas reapontadas, from_id removido) para o delta."""
+        if from_id not in self.nodes or to_id not in self.nodes or from_id == to_id:
+            return [], None
+        rerouted: list[GraphEdge] = []
+        for e in [e for e in self.edges.values() if e.source == from_id or e.target == from_id]:
+            ns = to_id if e.source == from_id else e.source
+            nt = to_id if e.target == from_id else e.target
+            if ns == nt:
+                continue
+            new = GraphEdge(id=self.edge_id(ns, e.type, nt), source=ns, target=nt, type=e.type,
+                            first_seen_turn=e.first_seen_turn, weight=e.weight, confidence=e.confidence,
+                            rationale=e.rationale, evidence=e.evidence)
+            if self.add_edge(new):
+                rerouted.append(new)
+        self.remove_node(from_id)
+        return rerouted, from_id
+
+
+def delta_payload(added_nodes: list[GraphNode], added_edges: list[GraphEdge], turn: int,
+                  removed_node_ids: list[str] | None = None) -> dict:
     return {
         "added_nodes": [asdict(n) for n in added_nodes],
         "added_edges": [asdict(e) for e in added_edges],
+        "removed_node_ids": removed_node_ids or [],
         "turn": turn,
     }

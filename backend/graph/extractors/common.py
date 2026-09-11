@@ -1,10 +1,74 @@
 """Helpers compartilhados dos extratores: parsing de 'Nome <email>', IDs de nó, links de Drive."""
 from __future__ import annotations
 
+import hashlib
 import re
+import unicodedata
+from datetime import datetime, timedelta, timezone
 
 _ADDR_RE = re.compile(r"^\s*(?:\"?(?P<name>[^\"<]*?)\"?\s*)?<(?P<email>[^>]+)>\s*$")
 _DRIVE_ID_RE = re.compile(r"(?:/d/|[?&]id=)([a-zA-Z0-9_-]{20,})")
+
+# Notas de reunião do Gemini: "<título> - YYYY/MM/DD HH:MM <TZ> - <sufixo Gemini>".
+# Verificado nos títulos reais do Drive: sufixos "Notes by Gemini" e "Anotações do Gemini";
+# TZ tanto "GMT-03:00" quanto abreviações ("EDT"); títulos podem ter hífen no meio.
+_GEMINI_RE = re.compile(
+    r"^(?P<title>.+?)\s*(?:-|às)\s*"
+    r"(?P<date>\d{4}/\d{2}/\d{2})\s+(?P<time>\d{1,2}:\d{2})\s+"
+    r"(?P<tz>GMT[+-]\d{1,2}(?::\d{2})?|[A-Za-z]{2,5})\s*-\s*"
+    r"(?P<suffix>Notes by Gemini|Anota[çc][õo]es do Gemini|Notas do Gemini)\s*$"
+)
+
+_TZ_ABBR = {  # offsets em horas para abreviações comuns
+    "UTC": 0, "GMT": 0, "BRT": -3, "BRST": -2, "EDT": -4, "EST": -5,
+    "CDT": -5, "CST": -6, "MDT": -6, "MST": -7, "PDT": -7, "PST": -8,
+}
+
+
+def normalize_title(text: str) -> str:
+    """Normaliza para comparação: minúsculas, sem acento, sem pontuação, espaços colapsados."""
+    if not text:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", text)
+    no_accent = "".join(c for c in nfkd if not unicodedata.combining(c))
+    cleaned = re.sub(r"[^a-z0-9]+", " ", no_accent.lower())
+    return " ".join(cleaned.split())
+
+
+def _tz(tz: str) -> timezone | None:
+    m = re.match(r"GMT([+-])(\d{1,2})(?::(\d{2}))?$", tz)
+    if m:
+        sign = 1 if m.group(1) == "+" else -1
+        return timezone(sign * timedelta(hours=int(m.group(2)), minutes=int(m.group(3) or 0)))
+    if tz.upper() in _TZ_ABBR:
+        return timezone(timedelta(hours=_TZ_ABBR[tz.upper()]))
+    return None
+
+
+def parse_gemini_title(name: str) -> tuple[str, str] | None:
+    """Reconhece nota de reunião do Gemini. Retorna (título_da_reunião, datetime_iso) ou None."""
+    if not name:
+        return None
+    m = _GEMINI_RE.match(name.strip())
+    if not m:
+        return None
+    title = m.group("title").strip()
+    try:
+        y, mo, d = (int(x) for x in m.group("date").split("/"))
+        hh, mm = (int(x) for x in m.group("time").split(":"))
+        dt = datetime(y, mo, d, hh, mm, tzinfo=_tz(m.group("tz")))
+    except ValueError:
+        return None
+    return title, dt.isoformat()
+
+
+def provisional_event_id(title: str, dt_iso: str) -> str:
+    key = f"{normalize_title(title)}|{dt_iso}"
+    return f"calendar:provisional:{hashlib.sha1(key.encode()).hexdigest()}"
+
+
+def provisional_person_id(name: str) -> str:
+    return f"person:provisional:{hashlib.sha1(normalize_title(name).encode()).hexdigest()}"
 
 
 def parse_address(raw: str) -> tuple[str, str]:

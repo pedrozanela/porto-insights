@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { streamChat, type SSEEvent } from "../api/sse";
 import { getConversation } from "../api/client";
-import type { ChatMessage, GraphData, GraphNode, GraphEdge, GenieCard } from "./types";
+import type { ChatMessage, GraphData, GraphNode, GraphEdge, GenieCard, Suggestion } from "./types";
 
 function newConversationId(): string {
   return `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -14,6 +14,7 @@ const EMPTY_GRAPH: GraphData = { nodes: [], edges: [], lastTurn: 0 };
 export function useConversation() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [graph, setGraph] = useState<GraphData>(EMPTY_GRAPH);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [conversationId, setConversationId] = useState<string>(() => newConversationId());
   const [streaming, setStreaming] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
@@ -34,13 +35,36 @@ export function useConversation() {
       return copy;
     });
 
-  const mergeGraph = (nodes: GraphNode[], edges: GraphEdge[], turn: number) =>
+  const mergeGraph = (nodes: GraphNode[], edges: GraphEdge[], turn: number, removed: string[]) =>
     setGraph((g) => {
       const byId = new Map(g.nodes.map((n) => [n.id, n]));
-      nodes.forEach((n) => byId.set(n.id, n));
+      nodes.forEach((n) => byId.set(n.id, n)); // merge por id (atualiza props, ex.: is_self)
+      removed.forEach((id) => byId.delete(id));
       const eById = new Map(g.edges.map((e) => [e.id, e]));
       edges.forEach((e) => eById.set(e.id, e));
+      // descarta arestas que tocam nós removidos
+      const alive = new Set(byId.keys());
+      for (const [id, e] of [...eById]) if (!alive.has(e.source) || !alive.has(e.target)) eById.delete(id);
       return { nodes: [...byId.values()], edges: [...eById.values()], lastTurn: turn };
+    });
+
+  // Move a narração pendente (texto antes de uma tool) para o trace, tirando-a da resposta.
+  const flushNarration = () =>
+    setMessages((ms) => {
+      const copy = [...ms];
+      for (let i = copy.length - 1; i >= 0; i--) {
+        if (copy[i].role !== "assistant") continue;
+        const m = copy[i];
+        const text = (m.content || "").trim();
+        const trace = m.trace ?? { label: "Consultando…", steps: [], narrations: [], done: false };
+        copy[i] = {
+          ...m,
+          content: "",
+          trace: text ? { ...trace, narrations: [...trace.narrations, text] } : trace,
+        };
+        break;
+      }
+      return copy;
     });
 
   const send = useCallback(
@@ -50,6 +74,7 @@ export function useConversation() {
 
       setError(null);
       setWarning(null);
+      setSuggestions([]);
       setMessages((m) => [...m, { role: "user", content: trimmed }, { role: "assistant", content: "" }]);
       setStreaming(true);
 
@@ -65,9 +90,15 @@ export function useConversation() {
                 patchLastAssistant((m) => ({ ...m, content: m.content + String(e.text ?? "") }));
                 break;
               case "tool_call_start":
+                flushNarration(); // texto antes desta tool é narração → vai pro trace
                 patchLastAssistant((m) => ({
                   ...m,
-                  trace: { label: String(e.label ?? "Consultando…"), steps: [], done: false },
+                  trace: {
+                    label: String(e.label ?? "Consultando…"),
+                    steps: m.trace?.steps ?? [],
+                    narrations: m.trace?.narrations ?? [],
+                    done: false,
+                  },
                 }));
                 break;
               case "tool_progress":
@@ -75,7 +106,7 @@ export function useConversation() {
                   ...m,
                   trace: m.trace
                     ? { ...m.trace, steps: [...m.trace.steps, String(e.step ?? "")] }
-                    : { label: "Consultando…", steps: [String(e.step ?? "")], done: false },
+                    : { label: "Consultando…", steps: [String(e.step ?? "")], narrations: [], done: false },
                 }));
                 break;
               case "tool_call_result":
@@ -99,13 +130,20 @@ export function useConversation() {
                   (e.added_nodes as GraphNode[]) ?? [],
                   (e.added_edges as GraphEdge[]) ?? [],
                   Number(e.turn ?? 0),
+                  (e.removed_node_ids as string[]) ?? [],
                 );
+                break;
+              case "suggestions":
+                setSuggestions((e.suggestions as Suggestion[]) ?? []);
                 break;
               case "warning":
                 setWarning(String(e.message ?? ""));
                 break;
               case "error":
                 setError(String(e.message ?? "Erro ao responder."));
+                break;
+              case "done":
+                patchLastAssistant((m) => (m.trace ? { ...m, trace: { ...m.trace, done: true } } : m));
                 break;
             }
           },
@@ -127,6 +165,7 @@ export function useConversation() {
     setConversationId(newConversationId());
     setMessages([]);
     setGraph(EMPTY_GRAPH);
+    setSuggestions([]);
     setWarning(null);
     setError(null);
     setStreaming(false);
@@ -139,6 +178,7 @@ export function useConversation() {
     setStreaming(false);
     setConversationId(id);
     setGraph(EMPTY_GRAPH); // o grafo é reconstruído conforme novas perguntas nesta sessão
+    setSuggestions([]);
     try {
       const msgs = await getConversation(id);
       setMessages(msgs.map((m) => ({ role: m.role, content: m.content })));
@@ -149,7 +189,7 @@ export function useConversation() {
   }, []);
 
   return {
-    messages, graph, conversationId, streaming, warning, error, changeToken,
+    messages, graph, suggestions, conversationId, streaming, warning, error, changeToken,
     send, startNew, open,
   };
 }
