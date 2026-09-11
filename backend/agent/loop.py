@@ -313,8 +313,11 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                                     "content": f"Ferramenta desconhecida: {name}."})
 
         # Fim do turno: promoção por evidência (o grafo mostra evidência, não exploração).
-        if used_tools:
-            state = graph.get(user.email, conversation_id)
+        # Roda também em turnos SEM tool quando já há grafo — assim uma pergunta de raciocínio
+        # (ex.: "isso tem relação com alguma reunião?") pode criar arestas related_to entre nós
+        # já existentes (cruza agenda ↔ dados).
+        state = graph.get(user.email, conversation_id)
+        if used_tools or len([n for n in state.nodes.values() if is_visible(n)]) >= 2:
             before_visible = {n.id for n in state.nodes.values() if is_visible(n)}
 
             # Enriquecimento (staging): traz o evento real do dia p/ um provisório, se Calendar ok.
