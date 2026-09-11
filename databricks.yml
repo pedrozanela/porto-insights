@@ -7,6 +7,12 @@
 bundle:
   name: porto-insights
 
+# frontend/dist é gitignorado (artefato de build), mas PRECISA ir no deploy — o FastAPI o serve.
+# sync.include força o envio mesmo estando no .gitignore.
+sync:
+  include:
+    - frontend/dist/**
+
 variables:
   warehouse_id:
     description: SQL warehouse serverless usado pelo app e pelo Genie (_meta.warehouse_id).

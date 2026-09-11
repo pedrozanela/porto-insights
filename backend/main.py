@@ -20,9 +20,12 @@ from .graph.store import GraphStore
 from .store.base import ConversationStore
 from .store.memory import InMemoryConversationStore
 
+from .tracing import init_tracing
+
 settings = get_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("porto_insights.main")
+init_tracing(settings.mlflow_experiment_path)  # no-op se MLFLOW_EXPERIMENT_PATH vazio
 
 app = FastAPI(title="Porto Insights", docs_url=None, redoc_url=None)
 

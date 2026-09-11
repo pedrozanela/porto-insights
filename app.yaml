@@ -1,13 +1,11 @@
 # Porto Insights — comando de start e env vars do Databricks Apps.
 # Nenhum segredo aqui. A auth é OBO (token do usuário via header). Os valores de MODEL_ENDPOINTS,
 # DEFAULT_MODEL_ENDPOINT e SQL_WAREHOUSE_ID vêm da descoberta da Fase 0 (docs/discovery.md).
+# sh -c para o shell expandir $DATABRICKS_APP_PORT (o array de command não faz substituição).
 command:
-  - uvicorn
-  - backend.main:app
-  - --host
-  - 0.0.0.0
-  - --port
-  - "${DATABRICKS_APP_PORT}"
+  - sh
+  - -c
+  - uvicorn backend.main:app --host 0.0.0.0 --port $DATABRICKS_APP_PORT
 
 env:
   - name: PORTO_CATALOG

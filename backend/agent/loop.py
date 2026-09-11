@@ -27,6 +27,7 @@ from ..mcp.client import mcp_session, structured, text_content
 from ..mcp.registry import get_registry
 from ..sse import sse
 from ..store.base import ConversationStore
+from ..tracing import trace_turn
 from .prompts import SYSTEM_PROMPT
 
 logger = logging.getLogger("porto_insights.agent")
@@ -155,6 +156,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
     client = build_async_client(settings.host_url, user.token)
     full_answer_parts: list[str] = []
     used_tools = False
+    tool_call_count = 0
 
     try:
         for _iteration in range(settings.agent_max_tool_iterations):
@@ -171,6 +173,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                 break
 
             used_tools = True
+            tool_call_count += len(tool_calls)
             working.append({"role": "assistant", "content": content or None, "tool_calls": tool_calls})
             for tc in tool_calls:
                 name = tc["function"]["name"]
@@ -233,4 +236,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
     answer = "".join(full_answer_parts).strip()
     if answer:
         await anyio.to_thread.run_sync(store.add_message, user.email, conversation_id, "assistant", answer)
+
+    graph_nodes = len(graph.get(user.email, conversation_id).nodes)
+    trace_turn(model=model, question=user_message, tool_calls=tool_call_count, graph_nodes=graph_nodes)
     yield sse("done", conversation_id=conversation_id, model=model)
