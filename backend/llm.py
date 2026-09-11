@@ -17,6 +17,24 @@ def build_async_client(host_url: str, user_token: str) -> AsyncOpenAI:
     return AsyncOpenAI(base_url=f"{host_url}/serving-endpoints", api_key=user_token)
 
 
+def _delta_text(content: Any) -> str:
+    """Extrai texto visível do delta.content. Modelos com raciocínio (ex.: Claude no Databricks)
+    entregam uma LISTA de blocos; só os blocos de texto viram tokens (reasoning é ignorado)."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out = []
+        for block in content:
+            if isinstance(block, str):
+                out.append(block)
+            elif isinstance(block, dict) and block.get("type") in ("text", "output_text") and block.get("text"):
+                out.append(block["text"])
+        return "".join(out)
+    return ""
+
+
 async def stream_turn(
     client: AsyncOpenAI,
     model: str,
@@ -42,9 +60,10 @@ async def stream_turn(
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
-        if delta and delta.content:
-            content_parts.append(delta.content)
-            yield {"type": "token", "text": delta.content}
+        text = _delta_text(getattr(delta, "content", None)) if delta else ""
+        if text:
+            content_parts.append(text)
+            yield {"type": "token", "text": text}
         for tc in (getattr(delta, "tool_calls", None) or []):
             acc = tool_acc.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
             if tc.id:

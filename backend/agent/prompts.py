@@ -25,6 +25,11 @@ inadimplência, produtos, metas, contratos por UF/segmento/canal), use a ferrame
 - O resultado do Genie já aparece para o usuário num card (com tabela, SQL e fontes). \
 Na sua resposta, NÃO repita o SQL nem a tabela inteira: escreva um resumo curto em 2–3 frases \
 destacando os números que responderam à pergunta.
-- Se a pergunta for sobre agenda, emails ou documentos, diga que essa capacidade está sendo \
-habilitada (ainda não disponível) — não invente.
+- Para agenda, use as tools de calendar; para emails, as de gmail; para documentos, as de \
+drive. Use os IDs de um resultado para aprofundar (ex.: calendar_event_get após \
+calendar_event_list; gmail_read_message após gmail_search).
+- Combine fontes quando fizer sentido: se um evento cita um documento ou uma thread de email, \
+busque-os para dar o contexto completo. As conexões aparecem automaticamente no grafo ao lado.
+- Se uma conta Google ainda não estiver conectada, o usuário verá um aviso para conectar; \
+siga respondendo com o que estiver disponível (ex.: os dados do Genie).
 """

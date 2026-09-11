@@ -81,9 +81,18 @@ export function useConversation() {
               case "tool_call_result":
                 patchLastAssistant((m) => ({
                   ...m,
-                  card: e.card as GenieCard,
+                  card: e.card ? (e.card as GenieCard) : m.card,
                   trace: m.trace ? { ...m.trace, done: true } : m.trace,
                 }));
+                break;
+              case "auth_required":
+                patchLastAssistant((m) => {
+                  const svc = String(e.service ?? "");
+                  const exists = (m.auth ?? []).some((a) => a.service === svc);
+                  return exists
+                    ? m
+                    : { ...m, auth: [...(m.auth ?? []), { service: svc, login_url: String(e.login_url ?? "") }] };
+                });
                 break;
               case "graph_delta":
                 mergeGraph(

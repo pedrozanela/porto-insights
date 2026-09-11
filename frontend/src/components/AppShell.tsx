@@ -58,7 +58,15 @@ export function AppShell() {
           />
         </section>
         <aside className="hidden min-h-0 lg:block">
-          <GraphPanel graph={conv.graph} />
+          <GraphPanel
+            graph={conv.graph}
+            onAskAbout={(node) => {
+              const kind = { calendar_event: "o evento", email: "o email", email_thread: "a thread",
+                drive_file: "o documento", person: "a pessoa", genie_answer: "esta resposta de dados",
+                data_asset: "este dado" }[node.type] ?? "isto";
+              conv.send(`Sobre ${kind} "${node.label}": traga mais contexto e relações relevantes.`, selectedModel);
+            }}
+          />
         </aside>
       </main>
     </div>

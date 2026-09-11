@@ -26,11 +26,17 @@ export interface ToolTrace {
   done: boolean;
 }
 
+export interface AuthRequired {
+  service: string;
+  login_url: string;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   trace?: ToolTrace;
   card?: GenieCard;
+  auth?: AuthRequired[];
 }
 
 export interface GraphNode {
