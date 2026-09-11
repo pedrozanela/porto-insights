@@ -16,15 +16,38 @@ from pydantic import BaseModel
 from .agent.loop import run_turn
 from .auth import UserContext, get_user_context
 from .config import get_settings
+from .store.base import ConversationStore
 from .store.memory import InMemoryConversationStore
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger("porto_insights.main")
 
 app = FastAPI(title="Porto Insights", docs_url=None, redoc_url=None)
 
-# POC: store em memória por sessão, atrás da interface ConversationStore (troca por Lakebase depois).
-store = InMemoryConversationStore()
+
+def _build_store() -> ConversationStore:
+    """Lakebase (histórico persistente) se configurado; senão, memória (fallback dev)."""
+    if settings.lakebase_endpoint:
+        try:
+            from .lakebase import LakebaseConnection
+            from .store.lakebase import LakebaseConversationStore
+
+            conn = LakebaseConnection(
+                endpoint=settings.lakebase_endpoint,
+                database=settings.lakebase_database,
+                profile=settings.databricks_config_profile,
+            )
+            store = LakebaseConversationStore(conn)
+            logger.info("histórico: Lakebase (%s)", settings.lakebase_endpoint)
+            return store
+        except Exception:  # noqa: BLE001
+            logger.exception("falha ao inicializar Lakebase — caindo para store em memória")
+    logger.info("histórico: em memória (não persiste)")
+    return InMemoryConversationStore()
+
+
+store = _build_store()
 
 
 class ChatRequest(BaseModel):
@@ -65,9 +88,23 @@ def chat(req: ChatRequest, user: UserContext = Depends(get_user_context)) -> Str
     )
 
 
+@app.get("/api/conversations")
+def list_conversations(user: UserContext = Depends(get_user_context)) -> dict:
+    """Conversas do usuário, mais recentes primeiro (para a lista de histórico)."""
+    convs = store.list_conversations(user.email)
+    return {"conversations": [vars(c) for c in convs]}
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(conversation_id: str, user: UserContext = Depends(get_user_context)) -> dict:
+    """Mensagens de uma conversa, para retomar de onde parou."""
+    msgs = store.get_messages(user.email, conversation_id)
+    return {"conversation_id": conversation_id, "messages": [vars(m) for m in msgs]}
+
+
 @app.post("/api/conversations/{conversation_id}/reset")
 def reset_conversation(conversation_id: str, user: UserContext = Depends(get_user_context)) -> dict:
-    """Limpa a conversa (mensagens + fio do Genie). Usado pelo botão 'Nova conversa'."""
+    """Apaga a conversa (mensagens + fio do Genie). Usado pelo botão 'Apagar'."""
     store.reset(user.email, conversation_id)
     return {"status": "ok"}
 

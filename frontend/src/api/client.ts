@@ -18,3 +18,31 @@ export async function fetchMe(): Promise<MeResponse> {
   if (!res.ok) throw new Error(`GET /api/me falhou: ${res.status}`);
   return res.json();
 }
+
+export interface ConversationMeta {
+  conversation_id: string;
+  title: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface StoredMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export async function listConversations(): Promise<ConversationMeta[]> {
+  const res = await fetch("/api/conversations");
+  if (!res.ok) throw new Error(`GET /api/conversations falhou: ${res.status}`);
+  return (await res.json()).conversations ?? [];
+}
+
+export async function getConversation(id: string): Promise<StoredMessage[]> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`GET /api/conversations/${id} falhou: ${res.status}`);
+  return (await res.json()).messages ?? [];
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  await fetch(`/api/conversations/${encodeURIComponent(id)}/reset`, { method: "POST" });
+}

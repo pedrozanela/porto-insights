@@ -35,3 +35,12 @@ resources:
           sql_warehouse:
             id: ${var.warehouse_id}
             permission: CAN_USE
+        # Lakebase (histórico de chat). Recurso do app: dá ao SP do app o direito de
+        # conectar/gerar credencial no projeto Lakebase 'porto-insights' (criado via CLI).
+        # database_id no path usa hífen ('databricks-postgres'); a conexão PG usa
+        # 'databricks_postgres'. Ownership do schema: ver docs/prerequisites-checklist.md.
+        - name: lakebase
+          postgres:
+            branch: projects/porto-insights/branches/production
+            database: projects/porto-insights/branches/production/databases/databricks-postgres
+            permission: CAN_CONNECT_AND_CREATE

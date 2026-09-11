@@ -1,74 +1,99 @@
-// Estado da conversa da sessão: mensagens, streaming e troca de modelo.
-// A persistência real é no backend (por sessão); aqui é só o espelho da UI.
+// Estado da conversa: mensagens, streaming, troca de modelo, e navegação entre conversas
+// persistidas (histórico no Lakebase). A persistência real é no backend; aqui é o espelho da UI.
 import { useCallback, useRef, useState } from "react";
-import { streamChat, resetConversation, type SSEEvent } from "../api/sse";
+import { streamChat, type SSEEvent } from "../api/sse";
+import { getConversation } from "../api/client";
 
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
 
-// Um id de conversa por montagem do app; "Nova conversa" gera um novo.
 function newConversationId(): string {
   return `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function useConversation() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversationId, setConversationId] = useState<string>(() => newConversationId());
   const [streaming, setStreaming] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const conversationId = useRef<string>(newConversationId());
+  // Incrementa quando o histórico muda (turno concluído, nova conversa), para a lista refazer o fetch.
+  const [changeToken, setChangeToken] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
-  const send = useCallback(async (text: string, model: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || streaming) return;
+  const send = useCallback(
+    async (text: string, model: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || streaming) return;
 
-    setError(null);
-    setWarning(null);
-    setMessages((m) => [...m, { role: "user", content: trimmed }, { role: "assistant", content: "" }]);
-    setStreaming(true);
+      setError(null);
+      setWarning(null);
+      setMessages((m) => [...m, { role: "user", content: trimmed }, { role: "assistant", content: "" }]);
+      setStreaming(true);
 
-    const abort = new AbortController();
-    abortRef.current = abort;
+      const abort = new AbortController();
+      abortRef.current = abort;
 
-    const appendToLast = (chunk: string) =>
-      setMessages((m) => {
-        const copy = [...m];
-        const last = copy[copy.length - 1];
-        if (last && last.role === "assistant") copy[copy.length - 1] = { ...last, content: last.content + chunk };
-        return copy;
-      });
+      const appendToLast = (chunk: string) =>
+        setMessages((m) => {
+          const copy = [...m];
+          const last = copy[copy.length - 1];
+          if (last && last.role === "assistant") copy[copy.length - 1] = { ...last, content: last.content + chunk };
+          return copy;
+        });
 
-    try {
-      await streamChat(
-        { conversation_id: conversationId.current, message: trimmed, model },
-        (e: SSEEvent) => {
-          if (e.type === "token") appendToLast(String(e.text ?? ""));
-          else if (e.type === "warning") setWarning(String(e.message ?? ""));
-          else if (e.type === "error") setError(String(e.message ?? "Erro ao responder."));
-        },
-        abort.signal,
-      );
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setStreaming(false);
-      abortRef.current = null;
-    }
-  }, [streaming]);
+      try {
+        await streamChat(
+          { conversation_id: conversationId, message: trimmed, model },
+          (e: SSEEvent) => {
+            if (e.type === "token") appendToLast(String(e.text ?? ""));
+            else if (e.type === "warning") setWarning(String(e.message ?? ""));
+            else if (e.type === "error") setError(String(e.message ?? "Erro ao responder."));
+          },
+          abort.signal,
+        );
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setStreaming(false);
+        abortRef.current = null;
+        setChangeToken((t) => t + 1); // atualiza a lista de histórico (título/ordem)
+      }
+    },
+    [streaming, conversationId],
+  );
 
-  const reset = useCallback(async () => {
+  // Nova conversa: NÃO apaga a atual — só começa uma nova (a anterior fica no histórico).
+  const startNew = useCallback(() => {
     abortRef.current?.abort();
-    const old = conversationId.current;
-    conversationId.current = newConversationId();
+    setConversationId(newConversationId());
     setMessages([]);
     setWarning(null);
     setError(null);
     setStreaming(false);
-    await resetConversation(old).catch(() => undefined);
   }, []);
 
-  return { messages, streaming, warning, error, send, reset };
+  // Abre uma conversa do histórico, carregando as mensagens do backend.
+  const open = useCallback(async (id: string) => {
+    abortRef.current?.abort();
+    setWarning(null);
+    setError(null);
+    setStreaming(false);
+    setConversationId(id);
+    try {
+      const msgs = await getConversation(id);
+      setMessages(msgs.map((m) => ({ role: m.role, content: m.content })));
+    } catch (e) {
+      setError(String(e));
+      setMessages([]);
+    }
+  }, []);
+
+  return {
+    messages, conversationId, streaming, warning, error, changeToken,
+    send, startNew, open,
+    notifyChanged: () => setChangeToken((t) => t + 1),
+  };
 }

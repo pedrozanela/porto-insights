@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     porto_schema: str = "porto_insights"
     sql_warehouse_id: str = "848374d85d2bad86"
 
+    # Lakebase (histórico de chat persistente). Vazio = usa store em memória.
+    lakebase_endpoint: str = "projects/porto-insights/branches/production/endpoints/primary"
+    lakebase_database: str = "databricks_postgres"
+
     # Modelos (allowlist "nome:Rótulo,nome:Rótulo")
     model_endpoints: str = ""
     default_model_endpoint: str = ""

@@ -1,42 +1,53 @@
 """Interface de persistência de conversas.
 
-POC: implementação em memória por sessão (ver memory.py). A interface existe para trocar
-depois por Lakebase sem mexer no resto (agent loop, endpoints). Não implementar Lakebase agora.
+Duas implementações: InMemory (POC/dev sem Lakebase) e Lakebase (Postgres, histórico real).
+A escolha é feita em main.py conforme a config. O restante do app (agent loop, endpoints) só
+conhece esta interface.
 
-Chave da conversa = identidade do usuário + id da conversa do app.
+Isolamento por usuário: toda operação recebe user_email e a implementação garante que um
+usuário só enxerga as próprias conversas.
 """
 from __future__ import annotations
 
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
 class Message:
-    role: str  # "user" | "assistant" | "system" | "tool"
+    role: str  # "user" | "assistant"
     content: str
 
 
 @dataclass
-class Conversation:
-    user_email: str
+class ConversationMeta:
     conversation_id: str
-    messages: list[Message] = field(default_factory=list)
-    # id da conversa no Genie One (Fase 3) — mantém o mesmo fio nas perguntas de follow-up.
-    genie_conversation_id: str | None = None
-    created_at: float = field(default_factory=time.time)
-    last_used: float = field(default_factory=time.time)
-
-    def touch(self) -> None:
-        self.last_used = time.time()
+    title: str
+    updated_at: str  # ISO 8601
+    message_count: int
 
 
 class ConversationStore(ABC):
     @abstractmethod
-    def get(self, user_email: str, conversation_id: str) -> Conversation:
-        """Retorna a conversa (criando uma vazia se não existir)."""
+    def add_message(self, user_email: str, conversation_id: str, role: str, content: str) -> None:
+        """Anexa uma mensagem. Cria a conversa se não existir (título = 1ª mensagem do usuário)."""
+
+    @abstractmethod
+    def get_messages(self, user_email: str, conversation_id: str) -> list[Message]:
+        """Histórico da conversa, em ordem cronológica."""
+
+    @abstractmethod
+    def list_conversations(self, user_email: str) -> list[ConversationMeta]:
+        """Conversas do usuário, mais recentes primeiro."""
 
     @abstractmethod
     def reset(self, user_email: str, conversation_id: str) -> None:
-        """Limpa a conversa (mensagens + genie_conversation_id)."""
+        """Remove a conversa (mensagens + metadados + fio do Genie)."""
+
+    @abstractmethod
+    def get_genie_conversation_id(self, user_email: str, conversation_id: str) -> str | None:
+        """Fio do Genie One associado (Fase 3), para follow-ups."""
+
+    @abstractmethod
+    def set_genie_conversation_id(self, user_email: str, conversation_id: str, genie_id: str) -> None:
+        ...

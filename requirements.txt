@@ -9,4 +9,5 @@ databricks-mcp==0.9.2
 mcp==2.1.1
 openai==3.8.0
 sqlglot==30.18.0
+psycopg[binary]==3.3.5
 python-dotenv==1.2.3

@@ -4,11 +4,13 @@ import { useConversation } from "../state/useConversation";
 import { Header } from "./Header/Header";
 import { ChatPanel } from "./Chat/ChatPanel";
 import { GraphPanel } from "./Graph/GraphPanel";
+import { ConversationList } from "./History/ConversationList";
 
 export function AppShell() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const conv = useConversation();
 
   useEffect(() => {
@@ -20,10 +22,6 @@ export function AppShell() {
       .catch((e) => setError(String(e)));
   }, []);
 
-  const newConversation = () => {
-    void conv.reset();
-  };
-
   return (
     <div className="flex h-full flex-col">
       <Header
@@ -32,8 +30,18 @@ export function AppShell() {
         models={me?.models ?? []}
         selectedModel={selectedModel}
         onModelChange={setSelectedModel}
-        onNewConversation={newConversation}
+        onNewConversation={() => { conv.startNew(); setHistoryOpen(false); }}
+        onToggleHistory={() => setHistoryOpen((v) => !v)}
       />
+      {historyOpen && (
+        <ConversationList
+          activeId={conv.conversationId}
+          refreshToken={conv.changeToken}
+          onOpen={(id) => { void conv.open(id); setHistoryOpen(false); }}
+          onDeleted={(id) => { if (id === conv.conversationId) conv.startNew(); }}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
       {error && (
         <div className="bg-red-50 px-6 py-2 text-sm text-red-700">
           Não foi possível carregar a configuração: {error}

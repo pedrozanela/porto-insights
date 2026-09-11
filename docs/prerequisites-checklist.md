@@ -28,6 +28,22 @@ marcados com ✅ já foram feitos/validados no workspace de field engineering
 - [ ] **Permissões de Unity Catalog** do próprio usuário sobre `pzanela_classic_aws_catalog.porto_insights`
       (as respostas do Genie One respeitam as permissões UC do usuário via OBO).
 
+## Lakebase (histórico de chat persistente)
+
+- [x] ✅ Projeto Lakebase `porto-insights` criado (branch `production`, endpoint `primary`,
+      db `databricks_postgres`). Serverless, scale-to-zero.
+- [x] ✅ Recurso `lakebase` declarado no app (databricks.yml) → dá ao SP do app o direito de
+      conectar e gerar credencial.
+- [ ] **Ownership do schema (fazer no deploy):** o schema `porto_insights` é criado por quem
+      roda a inicialização primeiro. Em dev local fui eu; ao deployar, o SP do app precisa
+      poder criar/usar o schema. Duas opções: (A) **deployar antes de rodar local** (o SP cria
+      e vira dono — recomendado pela doc); ou (B) se o schema já existe (criado por mim em dev),
+      conceder ao SP: `GRANT ALL ON SCHEMA porto_insights TO "<sp>"; GRANT ALL ON ALL TABLES IN
+      SCHEMA porto_insights TO "<sp>"; ALTER DEFAULT PRIVILEGES IN SCHEMA porto_insights GRANT
+      ALL ON TABLES TO "<sp>";`. Tratar na Fase 5.
+- Nota: o histórico usa a identidade do **app** (SP), não o OBO do usuário — é infra do app.
+  O isolamento por usuário é por `user_email` nas queries.
+
 ## No app (deploy)
 
 - [ ] **Scopes OBO declarados** no recurso `app` do DAB (`user_api_scopes`):

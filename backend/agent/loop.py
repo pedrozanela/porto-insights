@@ -14,7 +14,6 @@ from ..auth import UserContext
 from ..config import Settings
 from ..llm import build_client, stream_tokens
 from ..sse import sse
-from ..store.base import Message
 from ..store.base import ConversationStore
 from .prompts import SYSTEM_PROMPT
 
@@ -47,16 +46,19 @@ def run_turn(
         return
 
     model, warning = _resolve_model(settings, requested_model)
-    conv = store.get(user.email, conversation_id)
-    conv.messages.append(Message(role="user", content=user_message))
+
+    # Histórico anterior + a nova mensagem do usuário (persistida no store).
+    history = store.get_messages(user.email, conversation_id)
+    store.add_message(user.email, conversation_id, "user", user_message)
 
     yield sse("turn_start", conversation_id=conversation_id, model=model)
     if warning:
         yield sse("warning", message=warning)
 
-    # Monta o contexto: system + histórico da sessão.
+    # Monta o contexto: system + histórico + mensagem atual.
     payload = [{"role": "system", "content": SYSTEM_PROMPT}]
-    payload += [{"role": m.role, "content": m.content} for m in conv.messages]
+    payload += [{"role": m.role, "content": m.content} for m in history]
+    payload.append({"role": "user", "content": user_message})
 
     # Trace básico: registra qual modelo respondeu este turno.
     logger.info("turno usuário=%s conversa=%s modelo=%s", user.email, conversation_id, model)
@@ -79,5 +81,5 @@ def run_turn(
         return
 
     answer = "".join(parts)
-    conv.messages.append(Message(role="assistant", content=answer))
+    store.add_message(user.email, conversation_id, "assistant", answer)
     yield sse("done", conversation_id=conversation_id, model=model)
