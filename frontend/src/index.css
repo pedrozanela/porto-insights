@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tokens espelhados de src/theme.ts. TODO: hex oficiais Porto. */
+:root {
+  --color-primary: #1B4A9C;
+  --color-primary-dark: #0F2F63;
+  --color-accent: #2E86DE;
+  --color-surface: #FFFFFF;
+  --color-surface-muted: #F5F7FA;
+  --color-border: #E3E8EF;
+  --color-text: #1A2332;
+  --color-muted: #6B7688;
+}
+
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--color-surface-muted); color: var(--color-text); }

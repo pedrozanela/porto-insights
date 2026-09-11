@@ -6,3 +6,4 @@ docs/_raw_*.txt
 node_modules/
 frontend/dist/
 .DS_Store
+frontend/*.tsbuildinfo

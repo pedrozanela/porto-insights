@@ -1,0 +1,37 @@
+# Porto Insights — Databricks Asset Bundle.
+# Deploy: scripts/build_frontend.sh && databricks bundle deploy -t dev -p fevm-pzanela-classic-aws
+#
+# A config de runtime (command + env) vive no app.yaml (fonte única) — não duplicada aqui,
+# para evitar conflito entre as duas fontes. Aqui declaramos o recurso app, os scopes OBO e
+# o warehouse que o app pode usar.
+bundle:
+  name: porto-insights
+
+variables:
+  warehouse_id:
+    description: SQL warehouse serverless usado pelo app e pelo Genie (_meta.warehouse_id).
+    default: 848374d85d2bad86
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://fevm-pzanela-classic-aws.cloud.databricks.com
+
+resources:
+  apps:
+    porto_insights:
+      name: porto-insights
+      description: "Porto Insights — chat executivo com Genie One, Google Workspace e grafo de relacionamentos."
+      source_code_path: .
+      # Princípio do menor privilégio. Toda chamada a dados/ferramentas é OBO (token do usuário).
+      user_api_scopes:
+        - genie          # Genie One MCP
+        - model-serving  # endpoints de modelo (AI Gateway, interface OpenAI-compatible)
+        - ai-gateway     # MCP Services system.ai.* (Google Workspace)
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE

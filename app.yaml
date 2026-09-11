@@ -1,0 +1,34 @@
+# Porto Insights — comando de start e env vars do Databricks Apps.
+# Nenhum segredo aqui. A auth é OBO (token do usuário via header). Os valores de MODEL_ENDPOINTS,
+# DEFAULT_MODEL_ENDPOINT e SQL_WAREHOUSE_ID vêm da descoberta da Fase 0 (docs/discovery.md).
+command:
+  - uvicorn
+  - backend.main:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - "${DATABRICKS_APP_PORT}"
+
+env:
+  - name: PORTO_CATALOG
+    value: pzanela_classic_aws_catalog
+  - name: PORTO_SCHEMA
+    value: porto_insights
+  - name: SQL_WAREHOUSE_ID
+    value: "848374d85d2bad86"
+  - name: MODEL_ENDPOINTS
+    value: "databricks-claude-sonnet-5:Claude Sonnet 5,databricks-claude-opus-5:Claude Opus 5,databricks-gpt-5-5:GPT-5.5,databricks-gemini-3-8-flash:Gemini 3.8 Flash,databricks-llama-4-maverick:Llama 4 Maverick"
+  - name: DEFAULT_MODEL_ENDPOINT
+    value: databricks-claude-sonnet-5
+  - name: GENIE_MAX_WAIT_S
+    value: "260"
+  - name: MCP_GOOGLE_SERVICES
+    value: "system.ai.gmail,system.ai.google_calendar,system.ai.google_drive"
+  - name: AGENT_MAX_TOOL_ITERATIONS
+    value: "8"
+  - name: SEMANTIC_LINKER_MIN_CONFIDENCE
+    value: "0.6"
+  - name: TIME_WINDOW_DAYS
+    value: "3"
+  - name: LOG_LEVEL
+    value: INFO
