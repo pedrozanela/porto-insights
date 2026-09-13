@@ -33,9 +33,10 @@ resources:
       source_code_path: .
       # Princípio do menor privilégio. Toda chamada a dados/ferramentas é OBO (token do usuário).
       user_api_scopes:
-        - genie          # Genie One MCP
-        - model-serving  # endpoints de modelo (AI Gateway, interface OpenAI-compatible)
-        - ai-gateway     # MCP Services system.ai.* (Google Workspace)
+        - genie              # Genie One MCP
+        - model-serving      # endpoints de modelo (AI Gateway, interface OpenAI-compatible)
+        - ai-gateway         # MCP Services system.ai.* (Google Workspace)
+        - catalog.tables:read  # tables.get (OBO, só GET) p/ comentário/tipo do data_asset — B4
       resources:
         - name: sql-warehouse
           sql_warehouse:

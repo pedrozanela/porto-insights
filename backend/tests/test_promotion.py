@@ -25,20 +25,35 @@ def test_promocao_por_relevant_ids():
     assert is_visible(st.nodes["drive:d1"])
 
 
-def test_promocao_por_via_get():
+def test_via_get_sozinho_nao_promove():
+    # (c) removido: abrir "para conferir" (via_get) não é evidência — nem doc nem evento.
     st = GraphState()
-    st.add_node(staged("drive:d1", "drive_file", "Doc aberto", via_get=True))
-    st.add_node(staged("drive:d2", "drive_file", "Doc só listado"))
-    promote(st, answer_text="", relevant_ids=set(), asked_text="")
-    assert is_visible(st.nodes["drive:d1"]) and not is_visible(st.nodes["drive:d2"])
-
-
-def test_evento_via_get_sozinho_nao_promove():
-    # Abrir um evento "para conferir" (via_get) não é evidência: fica em staging.
-    st = GraphState()
+    st.add_node(staged("drive:d1", "drive_file", "Doc aberto", via_get=True, file_id="doc1"))
     st.add_node(staged("calendar:e1", "calendar_event", "Contas Salesforce", via_get=True))
-    promote(st, answer_text="resposta sobre a reunião com Lucca", relevant_ids=set(), asked_text="Lucca")
+    promote(st, answer_text="resposta sem referência a nada disso", relevant_ids=set(), asked_text="")
+    assert not is_visible(st.nodes["drive:d1"])
     assert not is_visible(st.nodes["calendar:e1"])
+
+
+def test_promocao_por_id_canonico_de_url():
+    # Referência por id canônico do Drive extraído de uma URL na resposta final.
+    fid = "1AbCdef_GHIjklmno-PQRstuvwx12"
+    st = GraphState()
+    st.add_node(staged("drive:" + fid, "drive_file", "Pauta", file_id=fid))
+    ans = f"Encontrei o doc: https://docs.google.com/document/d/{fid}/edit"
+    promote(st, answer_text=ans, relevant_ids=set(), asked_text="")
+    assert is_visible(st.nodes["drive:" + fid])
+
+
+def test_tres_eventos_um_promovido():
+    # Três eventos abertos (via_get); só o citado na resposta é promovido.
+    st = GraphState()
+    for i, name in enumerate(["Contas Salesforce", "M. Sales: BR SA Tech Meeting", "Databricks & Porto - App"]):
+        st.add_node(staged(f"calendar:e{i}", "calendar_event", name, via_get=True, summary=name))
+    promote(st, relevant_ids={"calendar:e2"},  # o linker marcou só o do Lucca
+            answer_text="A reunião correspondente é a Databricks & Porto - App.", asked_text="Lucca")
+    assert is_visible(st.nodes["calendar:e2"])
+    assert not is_visible(st.nodes["calendar:e0"]) and not is_visible(st.nodes["calendar:e1"])
 
 
 def test_promocao_tardia():
@@ -58,7 +73,8 @@ def test_evento_de_documento_de_notas_promove():
     st.add_node(staged("calendar:provisional:x", "calendar_event", "Reunião X"))
     st.add_edge(GraphEdge(id="nx", source="drive:d1", target="calendar:provisional:x",
                           type="notes_of", first_seen_turn=1))
-    promote(st, answer_text="", relevant_ids=set(), asked_text="")
+    # doc promovido por relevant_ids → seu evento (notes_of) também promove
+    promote(st, answer_text="", relevant_ids={"drive:d1"}, asked_text="")
     assert is_visible(st.nodes["drive:d1"]) and is_visible(st.nodes["calendar:provisional:x"])
 
 
@@ -94,3 +110,13 @@ def test_visible_delta_exclui_staging():
     st.add_node(staged("gmail:m2", "email", "escondido"))
     nodes, _ = visible_delta(st)
     assert [n.id for n in nodes] == ["gmail:m1"]
+
+
+def test_anexo_promovido_com_evento():
+    # B1: ao promover um evento, seu anexo (aresta attached) é promovido junto.
+    st = GraphState()
+    st.add_node(staged("calendar:e1", "calendar_event", "Comitê", summary="Comitê"))
+    st.add_node(staged("drive:pauta", "drive_file", "Pauta", file_id="pauta"))
+    st.add_edge(GraphEdge(id="att", source="calendar:e1", target="drive:pauta", type="attached", first_seen_turn=1))
+    promote(st, relevant_ids={"calendar:e1"}, answer_text="", asked_text="")
+    assert is_visible(st.nodes["calendar:e1"]) and is_visible(st.nodes["drive:pauta"])

@@ -4,14 +4,15 @@ from __future__ import annotations
 from typing import Any
 
 from ..schema import GraphEdge, GraphNode, GraphState
-from .common import event_id, person_id
+from .common import display_name, drive_id, event_id, extract_drive_ids, person_id
+from .drive import drive_file_from_url
 
 
 def _person(state: GraphState, added_n, name: str, email: str, turn: int) -> str | None:
     if not email:
         return None
     pid = person_id(email)
-    n = state.add_node(GraphNode(id=pid, type="person", label=name or email, source="calendar",
+    n = state.add_node(GraphNode(id=pid, type="person", label=display_name(name, email), source="calendar",
                                  url=f"mailto:{email}", first_seen_turn=turn, props={"email": email}))
     if n:
         added_n.append(n)
@@ -25,6 +26,16 @@ def _start(ev: dict[str, Any]) -> str | None:
     return str(s) if s else None
 
 
+def _attach(state: GraphState, added_n, added_e, cid: str, fid: str, url: str, turn: int) -> None:
+    did = drive_file_from_url(state, added_n, fid, url, turn)
+    if did:
+        e = state.add_edge(GraphEdge(id=GraphState.edge_id(cid, "attached", did),
+                                     source=cid, target=did, type="attached", first_seen_turn=turn,
+                                     weight=0.9, evidence=["anexo/link do convite"]))
+        if e:
+            added_e.append(e)
+
+
 def _add_event(state: GraphState, added_n, added_e, ev: dict[str, Any], turn: int, full: bool) -> None:
     eid_raw = ev.get("id")
     if not eid_raw:
@@ -36,13 +47,12 @@ def _add_event(state: GraphState, added_n, added_e, ev: dict[str, Any], turn: in
         id=cid, type="calendar_event", label=summary[:60], source="calendar",
         url=ev.get("htmlLink"), first_seen_turn=turn,
         props={"summary": summary, "start": _start(ev), "location": ev.get("location"),
-               "description": desc, "_text": f"{summary} {desc}"},
-    ))
+               "description": desc, "_text": f"{summary} {desc}"}))
     if node:
         added_n.append(node)
 
     if not full:
-        return  # event_list não traz attendees/organizer
+        return  # event_list não traz attendees/organizer/anexos
 
     org = ev.get("organizer") or {}
     if isinstance(org, dict) and org.get("email"):
@@ -61,6 +71,17 @@ def _add_event(state: GraphState, added_n, added_e, ev: dict[str, Any], turn: in
                                          source=cid, target=pid, type="attendee", first_seen_turn=turn))
             if e:
                 added_e.append(e)
+
+    # B1: anexos formais do convite → drive_file + attached
+    for a in ev.get("attachments", []) or []:
+        if not isinstance(a, dict):
+            continue
+        fid = a.get("fileId") or "".join(extract_drive_ids(a.get("fileUrl", "")))
+        if fid:
+            _attach(state, added_n, added_e, cid, fid, a.get("fileUrl") or "", turn)
+    # links de Drive na descrição do convite → também tratados como anexo do evento
+    for fid in extract_drive_ids(desc):
+        _attach(state, added_n, added_e, cid, fid, f"https://docs.google.com/document/d/{fid}/edit", turn)
 
 
 def extract_calendar(state: GraphState, tool_name: str, result: dict[str, Any], turn: int):

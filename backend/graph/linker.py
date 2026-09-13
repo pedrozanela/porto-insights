@@ -109,6 +109,12 @@ def deterministic_links(state: GraphState, turn: int, time_window_days: int) -> 
     return added
 
 
+def pair_linked(state: GraphState, a: str, b: str) -> bool:
+    """True se já existe qualquer aresta entre a e b (precedência determinística sobre related_to)."""
+    return any((e.source == a and e.target == b) or (e.source == b and e.target == a)
+               for e in state.edges.values())
+
+
 def reconcile_provisionals(state: GraphState, turn: int) -> tuple[list[GraphEdge], list[str]]:
     """Funde nós provisórios nos reais equivalentes. Retorna (arestas novas, ids removidos).
     - evento provisório → evento real: mesmo título normalizado e start em ±15 min.
@@ -211,6 +217,8 @@ async def semantic_links(
         src, tgt = p.get("source"), p.get("target")
         conf = float(p.get("confidence", 0) or 0)
         if src not in state.nodes or tgt not in state.nodes or src == tgt or conf < min_confidence:
+            continue
+        if pair_linked(state, src, tgt):  # B2: já conectados deterministicamente → não propor related_to
             continue
         e = state.add_edge(GraphEdge(
             id=GraphState.edge_id(src, "related_to", tgt), source=src, target=tgt, type="related_to",

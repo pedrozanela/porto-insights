@@ -3,7 +3,7 @@ import ForceGraph2D from "react-force-graph-2d";
 import { nodeColors, nodeLabels } from "../../theme";
 import type { GraphData, GraphNode } from "../../state/types";
 import { shortLabel, EDGE_LABELS } from "../../graph/labels";
-import { glyph } from "../../graph/glyphs";
+import { glyph, glyphType } from "../../graph/glyphs";
 import { NodeDetail } from "./NodeDetail";
 
 const SELF_COLOR = "#005bbf";
@@ -17,6 +17,7 @@ export function GraphPanel({
   onAskAbout: (node: GraphNode) => void;
   onPromote: (ids: string[]) => void;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -24,9 +25,12 @@ export function GraphPanel({
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [hideSelf, setHideSelf] = useState(false);
   const [hoverEdge, setHoverEdge] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
   const manualRef = useRef(false); // usuário deu pan/zoom → suspende auto-fit
   const highlightUntil = useRef(0);
   const [, forceTick] = useState(0);
+
+  const MIN_ZOOM = 0.2, MAX_ZOOM = 8;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -52,7 +56,7 @@ export function GraphPanel({
     if (!graph.nodes.length || !fgRef.current) return;
     manualRef.current = false;
     highlightUntil.current = Date.now() + 3000;
-    const t = setTimeout(() => { if (!manualRef.current) fitWithCap(); }, 250);
+    const t = setTimeout(() => { if (!manualRef.current) fitToScreen(); }, 250);
     // anima o pulso por 3s
     const iv = setInterval(() => {
       forceTick((x) => x + 1);
@@ -62,16 +66,39 @@ export function GraphPanel({
     return () => { clearTimeout(t); clearInterval(iv); };
   }, [graph.lastTurn, graph.nodes.length, size.w]);
 
-  const fitWithCap = () => {
+  // Ajustar à tela: enquadra tudo com folga de 40px. O teto de escala só vale para grafos
+  // minúsculos (≤3 nós), senão deixamos aproximar até o zoomToFit natural (limitado por MAX_ZOOM).
+  const fitToScreen = () => {
     const fg = fgRef.current;
     if (!fg) return;
-    fg.zoomToFit(600, 60);
+    fg.zoomToFit(600, 40);
     setTimeout(() => {
       const z = fg.zoom();
-      if (z > 2.5) fg.zoom(2.5, 400);
-      if (z < 0.25) fg.zoom(0.25, 400);
+      if (z < MIN_ZOOM) fg.zoom(MIN_ZOOM, 400);
+      if (data.nodes.length <= 3 && z > 2.5) fg.zoom(2.5, 400);   // não estourar 1–3 nós
     }, 620);
   };
+
+  const zoomBy = (factor: number) => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    manualRef.current = true;
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fg.zoom() * factor));
+    fg.zoom(z, 250);
+  };
+
+  const toggleFullscreen = () => {
+    const el = rootRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen();
+    else el.requestFullscreen?.();
+  };
+
+  useEffect(() => {
+    const onFs = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
 
   const types = useMemo(() => [...new Set(graph.nodes.map((n) => n.type))], [graph.nodes]);
   const visibleCount = useMemo(
@@ -94,16 +121,24 @@ export function GraphPanel({
   const toggleType = (t: string) =>
     setHidden((h) => { const n = new Set(h); n.has(t) ? n.delete(t) : n.add(t); return n; });
 
+  // Teclado: + aproxima, − afasta, 0 ajusta à tela (quando o cursor está sobre o painel).
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.4); }
+    else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.4); }
+    else if (e.key === "0") { e.preventDefault(); manualRef.current = false; fitToScreen(); }
+  };
+
   return (
-    <div className="flex h-full flex-col bg-surface">
+    <div ref={rootRef} tabIndex={0} onKeyDown={onKeyDown}
+      className="flex h-full flex-col bg-surface outline-none">
       <div className="flex items-center justify-between border-b border-borderc px-5 py-3">
         <h2 className="text-sm font-semibold text-textc">Grafo de relacionamentos</h2>
         {!empty && (
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted">{visibleCount} nós</span>
-            <button onClick={() => { manualRef.current = false; fitWithCap(); }}
+            <button onClick={() => { manualRef.current = false; fitToScreen(); }}
               className="rounded-md border border-borderc px-2 py-1 text-xs text-textc hover:bg-surfaceMuted">
-              Recentrar
+              Ajustar à tela
             </button>
           </div>
         )}
@@ -125,9 +160,11 @@ export function GraphPanel({
                 height={size.h}
                 graphData={data}
                 backgroundColor="#ffffff"
-                maxZoom={2.5}
+                minZoom={MIN_ZOOM}
+                maxZoom={MAX_ZOOM}
                 cooldownTicks={40}
                 d3AlphaDecay={0.08}
+                onEngineStop={() => { if (!manualRef.current) fitToScreen(); }}
                 onZoom={() => { manualRef.current = true; }}
                 onNodeClick={(n: any) => setSelected(graph.nodes.find((x) => x.id === n.id) ?? null)}
                 onBackgroundClick={() => setSelected(null)}
@@ -150,6 +187,23 @@ export function GraphPanel({
                   const fs = 9 / scale;
                   ctx.font = `${fs}px system-ui`;
                   const w = ctx.measureText(txt).width;
+
+                  // B7: oculta o rótulo da aresta se colidir com o rótulo de qualquer nó.
+                  const er = { x0: mx - w / 2 - 2 / scale, y0: my - fs / 2 - 1 / scale,
+                               x1: mx + w / 2 + 2 / scale, y1: my + fs / 2 + 1 / scale };
+                  const nfs = 11 / scale;
+                  for (const nd of data.nodes as any[]) {
+                    if (typeof nd.x !== "number" || typeof nd.y !== "number") continue;
+                    ctx.font = `${nfs}px system-ui`;
+                    const nw = ctx.measureText(shortLabel(nd)).width;
+                    const nr = radiusOf(nd.id) / scale;
+                    const ly = nd.y + nr + nfs * 0.9;
+                    const box = { x0: nd.x - nw / 2 - 3 / scale, y0: ly - nfs / 2 - 1 / scale,
+                                  x1: nd.x + nw / 2 + 3 / scale, y1: ly + nfs / 2 + 1 / scale };
+                    if (er.x0 < box.x1 && er.x1 > box.x0 && er.y0 < box.y1 && er.y1 > box.y0) return;
+                  }
+                  ctx.font = `${fs}px system-ui`; // restaura fonte da aresta
+
                   ctx.fillStyle = "rgba(255,255,255,0.85)";
                   ctx.fillRect(mx - w / 2 - 2 / scale, my - fs / 2 - 1 / scale, w + 4 / scale, fs + 2 / scale);
                   ctx.fillStyle = "#64748b";
@@ -184,7 +238,7 @@ export function GraphPanel({
                     ctx.fillStyle = "#fff"; ctx.font = `${r}px system-ui`;
                     ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("V", node.x, node.y);
                   } else {
-                    const g = glyph(node.type);
+                    const g = glyph(glyphType(node));
                     if (g) { const s = r * 1.3; ctx.globalAlpha = provisional ? 0.7 : 1;
                       ctx.drawImage(g, node.x - s / 2, node.y - s / 2, s, s); ctx.globalAlpha = 1; }
                   }
@@ -222,6 +276,24 @@ export function GraphPanel({
                   {hoverEdge}
                 </div>
               )}
+              {/* Controles de zoom/enquadramento (canto inferior direito). */}
+              <div className="absolute bottom-3 right-3 flex flex-col items-stretch gap-1">
+                <div className="flex overflow-hidden rounded-md border border-borderc bg-surface/95 shadow-sm">
+                  <button onClick={() => zoomBy(1.4)} title="Aproximar (+)"
+                    className="px-2.5 py-1 text-sm text-textc hover:bg-surfaceMuted">+</button>
+                  <span className="w-px bg-borderc" />
+                  <button onClick={() => zoomBy(1 / 1.4)} title="Afastar (−)"
+                    className="px-2.5 py-1 text-sm text-textc hover:bg-surfaceMuted">−</button>
+                </div>
+                <button onClick={() => { manualRef.current = false; fitToScreen(); }}
+                  className="rounded-md border border-borderc bg-surface/95 px-2 py-1 text-xs text-textc shadow-sm hover:bg-surfaceMuted">
+                  Ajustar à tela
+                </button>
+                <button onClick={toggleFullscreen}
+                  className="rounded-md border border-borderc bg-surface/95 px-2 py-1 text-xs text-textc shadow-sm hover:bg-surfaceMuted">
+                  {fullscreen ? "Sair" : "Expandir"}
+                </button>
+              </div>
               {selected && (
                 <NodeDetail node={selected} graph={graph}
                   onAskAbout={(n) => { onAskAbout(n); setSelected(null); }}

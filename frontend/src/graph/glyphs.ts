@@ -50,6 +50,15 @@ function draw(type: string, ctx: CanvasRenderingContext2D): void {
       ctx.moveTo(R - 4, B - 8); ctx.lineTo(R - 4, T + 8); ctx.stroke();
       break;
     }
+    case "metric_view": {
+      // eixos + 3 barras: distingue metric view (métricas) da tabela (cilindro).
+      ctx.beginPath(); ctx.moveTo(L + 4, T + 2); ctx.lineTo(L + 4, B - 4); ctx.lineTo(R - 2, B - 4); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(L + 12, B - 4); ctx.lineTo(L + 12, c + 4);
+      ctx.moveTo(c, B - 4); ctx.lineTo(c, T + 8);
+      ctx.moveTo(R - 8, B - 4); ctx.lineTo(R - 8, c - 2); ctx.stroke();
+      break;
+    }
     case "genie_answer": {
       ctx.beginPath();
       ctx.moveTo(c, T); ctx.lineTo(c + 5, c - 5); ctx.lineTo(R, c);
@@ -61,6 +70,12 @@ function draw(type: string, ctx: CanvasRenderingContext2D): void {
       ctx.beginPath(); ctx.arc(c, c, 5, 0, 2 * Math.PI); ctx.fill();
     }
   }
+}
+
+// Chave de glyph efetiva: um data_asset marcado como metric view usa o ícone de barras.
+export function glyphType(node: { type: string; props?: Record<string, unknown> }): string {
+  if (node.type === "data_asset" && node.props?.asset_type === "metric_view") return "metric_view";
+  return node.type;
 }
 
 export function glyph(type: string): HTMLCanvasElement | null {

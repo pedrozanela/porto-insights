@@ -90,6 +90,30 @@ def _mark_self(state, user_email: str) -> GraphNode | None:
     return None
 
 
+async def _enrich_data_assets(user, state) -> None:
+    """B4: para cada data_asset novo, busca no Unity Catalog (OBO) o comentário → rótulo de
+    exibição e o tipo (metric view vs tabela). Nome técnico fica em props.title (tooltip/painel)."""
+    for n in [x for x in state.nodes.values() if x.type == "data_asset" and not x.props.get("uc_resolved")]:
+        fq = n.props.get("qualified_name")
+        if not fq or fq.count(".") != 2:
+            n.props["uc_resolved"] = True
+            continue
+        try:
+            info = await anyio.to_thread.run_sync(lambda: user.wsc.tables.get(fq))
+            comment = (getattr(info, "comment", None) or "").strip()
+            ttype = str(getattr(info, "table_type", "") or "")
+            if comment:  # rótulo = 1ª oração do comentário do UC
+                n.label = comment.split(".")[0].split(",")[0][:40]
+            if "METRIC" in ttype.upper():
+                n.props["asset_type"] = "metric_view"
+        except Exception as e:  # noqa: BLE001
+            # Fallback benigno: sem o scope catalog.tables:read no token OBO (ex.: consentimento
+            # do usuário anterior ao scope), mantém o nome técnico. Glyph/tipo já vêm da heurística.
+            logger.info("enrich_data_assets: tables.get(%s) indisponível (%s) — mantendo nome técnico",
+                        fq, type(e).__name__)
+        n.props["uc_resolved"] = True
+
+
 async def _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry) -> None:
     """Fallback determinístico: para cada evento provisório, busca o dia no Calendar e abre o
     evento correspondente (traz participantes, em staging). A reconciliação funde provisório→real."""
@@ -335,7 +359,25 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                 client, model, state, turn, settings.semantic_linker_min_confidence,
                 answer_text=final_answer)
             # Promoção por evidência + colapso de participantes.
-            promote(state, answer_text=final_answer, relevant_ids=relevant_ids, asked_text=user_message)
+            promoted_ids = promote(state, answer_text=final_answer, relevant_ids=relevant_ids,
+                                   asked_text=user_message)
+
+            # A2: se o modelo abriu vários eventos candidatos e só 1 é a evidência, registra no trace.
+            opened_ev = [n for n in state.nodes.values()
+                         if n.type == "calendar_event" and n.props.get("via_get")]
+            promoted_ev = [state.nodes[i] for i in promoted_ids
+                           if i in state.nodes and state.nodes[i].type == "calendar_event"]
+            if len(opened_ev) >= 2 and len(promoted_ev) == 1:
+                day = str(promoted_ev[0].props.get("start", ""))[:10]
+                day_br = f"{day[8:10]}/{day[5:7]}" if len(day) == 10 else ""
+                yield sse("tool_progress", tool="agenda",
+                          step=f"Verifiquei {len(opened_ev)} reuniões"
+                          + (f" do dia {day_br}" if day_br else "")
+                          + f"; a correspondente é “{promoted_ev[0].label}”.")
+
+            # B4: rótulo do data_asset a partir do comentário do Unity Catalog (OBO), best-effort.
+            await _enrich_data_assets(user, state)
+
             deterministic_links(state, turn, settings.time_window_days)
             _mark_self(state, user.email)  # Bloco 2
 

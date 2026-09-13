@@ -19,7 +19,8 @@ def test_extract_drive_ids():
     assert extract_drive_ids(txt) == ["1AbC_def-GHITjklmnop123456"]
 
 
-def test_gmail_search_creates_email_thread_and_persons():
+def test_gmail_search_cria_email_e_pessoas_sem_thread():
+    # Busca NÃO cria nó de thread (A4); cria email + pessoas.
     state = GraphState()
     result = {"items": [{
         "id": "m1", "threadId": "t1", "subject": "Comitê de Crédito PJ",
@@ -27,10 +28,61 @@ def test_gmail_search_creates_email_thread_and_persons():
         "snippet": "pauta do comitê",
     }]}
     nodes, edges = extract_gmail(state, "gmail_search", result, turn=1)
-    types = sorted({n.type for n in nodes})
-    assert types == ["email", "email_thread", "person"]
-    etypes = {e.type for e in edges}
-    assert {"sender", "recipient", "in_thread"} <= etypes
+    types = {n.type for n in nodes}
+    assert "email" in types and "person" in types
+    assert "email_thread" not in types
+    assert {"sender", "recipient"} <= {e.type for e in edges}
+
+
+def test_gmail_thread_duas_mensagens_cria_thread():
+    state = GraphState()
+    result = {"id": "t1", "messages": [
+        {"id": "m1", "subject": "Comitê", "from": "Ana <ana@porto.com>"},
+        {"id": "m2", "subject": "Re: Comitê", "from": "Bruno <bruno@porto.com>"},
+    ]}
+    nodes, edges = extract_gmail(state, "gmail_get_thread", result, turn=1)
+    assert any(n.type == "email_thread" for n in nodes)
+    assert sum(1 for e in edges if e.type == "in_thread") == 2
+
+
+def test_gmail_thread_uma_mensagem_sem_thread():
+    state = GraphState()
+    result = {"id": "t1", "messages": [{"id": "m1", "subject": "Só uma", "from": "Ana <ana@porto.com>"}]}
+    nodes, _ = extract_gmail(state, "gmail_get_thread", result, turn=1)
+    assert not any(n.type == "email_thread" for n in nodes)  # thread única não vira nó
+
+
+def test_gmail_remetente_automatico():
+    state = GraphState()
+    result = {"items": [{"id": "m1", "threadId": "t1", "subject": "Notas da reunião",
+                         "from": "Gemini <notifications@google.com>", "date": "Thu, 10 Sep 2026 10:00:00 -0300"}]}
+    nodes, edges = extract_gmail(state, "gmail_search", result, turn=1)
+    email = next(n for n in nodes if n.type == "email")
+    assert email.props["automated_sender"] is True
+    assert email.label.endswith("(automático)")
+    assert not any(n.type == "person" for n in nodes)  # remetente automático não vira pessoa
+    assert not any(e.type == "sender" for e in edges)
+
+
+def test_gmail_link_de_drive_no_corpo_cria_drive_file():
+    fid = "1AbCdef_GHIjklmno-PQRstuvwx12"
+    state = GraphState()
+    extract_gmail(state, "gmail_read_message", {
+        "id": "m1", "threadId": "t1", "subject": "Comitê", "from": "Ana <ana@porto.com>",
+        "body": f"segue a pauta: https://docs.google.com/document/d/{fid}/edit",
+    }, turn=1)
+    assert any(n.type == "drive_file" and n.props["file_id"] == fid for n in state.nodes.values())
+    assert any(e.type == "links_to" for e in state.edges.values())
+
+
+def test_pessoa_rotulo_nunca_email():
+    state = GraphState()
+    nodes, _ = extract_gmail(state, "gmail_search", {"items": [{
+        "id": "m1", "threadId": "t1", "subject": "x", "from": "fernando.custodio@databricks.com",
+    }]}, turn=1)
+    p = next(n for n in nodes if n.type == "person")
+    assert p.label == "Fernando Custodio" and "@" not in p.label
+    assert p.props["email"] == "fernando.custodio@databricks.com"
 
 
 def test_calendar_event_get_organizer_and_attendees():

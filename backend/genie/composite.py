@@ -82,6 +82,7 @@ def card_payload(r: GenieResult) -> dict[str, Any]:
         "answer": r.answer,
         "sql": r.sql,
         "columns": r.columns,
+        "column_types": r.column_types,
         "rows": r.rows,
         "truncated": r.truncated,
         "sources": _sources(r),

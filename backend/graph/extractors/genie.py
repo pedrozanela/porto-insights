@@ -94,10 +94,13 @@ def extract_genie(
 
     for fq in tables:
         asset_id = f"asset:table:{fq}"
+        short = fq.split(".")[-1]
         an = state.add_node(GraphNode(
-            id=asset_id, type="data_asset", label=fq.split(".")[-1],
+            id=asset_id, type="data_asset", label=short,
             source="genie", url=url_by_table.get(fq), first_seen_turn=turn,
-            props={"asset_type": "table", "qualified_name": fq},
+            # asset_type por heurística (mv_ = metric view); título técnico p/ tooltip/painel.
+            props={"asset_type": "metric_view" if short.startswith("mv_") else "table",
+                   "qualified_name": fq, "title": fq},
         ))
         if an:
             added_nodes.append(an)

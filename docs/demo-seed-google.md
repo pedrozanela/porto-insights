@@ -6,7 +6,7 @@ conteúdo já está pronto para copiar e colar e é **coerente com os dados sint
 nomes de produto e números-chave de setembro/2026 que o Genie One responde).
 
 Números de referência (batem com o Genie): **Capital de Giro PJ** — originação **R$ 43,19 mi**,
-**118%** da meta; inadimplência 90d **8,1%** vs teto **6,7%** (gap **+1,4 p.p.**).
+**117,6%** da meta; inadimplência 90d **8,1%** vs teto **6,7%** (gap **+1,4 p.p.**).
 
 > Preencha os `<...>`. Onde pedir colegas, use 2 pessoas reais do seu workspace (você recebe/vê
 > os emails). Crie tudo com a **sua** conta (a mesma logada no app).
@@ -21,7 +21,7 @@ Crie um Google Doc com esse título e este conteúdo:
 Pauta — Comitê de Crédito PJ (setembro/2026)
 
 1. Capital de Giro PJ — desempenho do mês
-   - Originação de R$ 43,19 mi, atingindo 118% da meta (R$ 36,60 mi).
+   - Originação de R$ 43,19 mi, atingindo 117,6% da meta (R$ 36,73 mi).
    - Ponto de atenção: inadimplência 90d em 8,1%, acima do teto de 6,7% da meta (+1,4 p.p.).
 
 2. Diagnóstico da inadimplência
@@ -53,7 +53,7 @@ Crie um evento **para amanhã** (ou o próximo dia útil), com:
 Comitê mensal de crédito PJ. Pauta e números do mês em:
 <COLAR_LINK_DO_DOC>
 
-Foco: desempenho de Capital de Giro PJ (originação 118% da meta) e o ponto de atenção
+Foco: desempenho de Capital de Giro PJ (originação 117,6% da meta) e o ponto de atenção
 na inadimplência (8,1% vs teto 6,7%).
 ```
 
@@ -70,7 +70,7 @@ uma thread. Sugestão de conteúdo:
 Pessoal, segue a pauta do Comitê de Crédito PJ de amanhã:
 <COLAR_LINK_DO_DOC>
 
-Destaque do mês: Capital de Giro PJ originou R$ 43,19 mi (118% da meta). O ponto de
+Destaque do mês: Capital de Giro PJ originou R$ 43,19 mi (117,6% da meta). O ponto de
 atenção é a inadimplência 90d em 8,1%, acima do teto de 6,7%.
 ```
 

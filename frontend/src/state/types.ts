@@ -11,6 +11,7 @@ export interface GenieCard {
   answer: string;
   sql: string | null;
   columns: string[];
+  column_types?: string[];
   rows: (string | number)[][];
   truncated: boolean;
   sources: GenieSource[];

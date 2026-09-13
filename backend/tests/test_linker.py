@@ -5,7 +5,7 @@ from backend.graph.extractors.calendar import extract_calendar
 from backend.graph.extractors.drive import extract_drive
 from backend.graph.extractors.gmail import extract_gmail
 from backend.graph.linker import deterministic_links
-from backend.graph.schema import GraphState
+from backend.graph.schema import GraphEdge, GraphNode, GraphState
 from backend.mcp.allowlist import allowed, is_write_tool
 
 
@@ -19,8 +19,9 @@ def test_links_to_drive_from_email_body():
         "id": "m1", "threadId": "t1", "subject": "Comitê", "from": "Ana <ana@porto.com>",
         "body": f"segue a pauta: {url}", "date": "Thu, 10 Sep 2026 10:00:00 -0300",
     }, 1)
-    edges = deterministic_links(state, turn=1, time_window_days=3)
-    assert any(e.type == "links_to" for e in edges)
+    # o extrator do Gmail já cria a aresta links_to a partir do link no corpo
+    deterministic_links(state, turn=1, time_window_days=3)
+    assert any(e.type == "links_to" for e in state.edges.values())
 
 
 def test_same_time_window_event_and_email_with_common_person():
@@ -59,3 +60,15 @@ def test_allowlist_blocks_writes_allows_reads():
     assert allowed("gmail_search", "busca", extra_allow=set(), extra_deny=set())
     # override por denylist
     assert not allowed("gmail_search", "busca", extra_allow=set(), extra_deny={"gmail_search"})
+
+
+def test_precedencia_deterministica_pair_linked():
+    from backend.graph.linker import pair_linked
+    st = GraphState()
+    st.add_node(GraphNode(id="genie:x", type="genie_answer", label="a", source="genie", first_seen_turn=1))
+    st.add_node(GraphNode(id="asset:table:cat.sch.mv", type="data_asset", label="mv", source="genie", first_seen_turn=1))
+    st.add_edge(GraphEdge(id="c", source="genie:x", target="asset:table:cat.sch.mv", type="cites", first_seen_turn=1))
+    # já ligados por 'cites' (determinístico) → o semântico não deve propor related_to
+    assert pair_linked(st, "genie:x", "asset:table:cat.sch.mv")
+    assert pair_linked(st, "asset:table:cat.sch.mv", "genie:x")
+    assert not pair_linked(st, "genie:x", "inexistente")

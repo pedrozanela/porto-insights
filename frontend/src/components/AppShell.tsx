@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchMe, type MeResponse } from "../api/client";
 import { useConversation } from "../state/useConversation";
 import { Header } from "./Header/Header";
@@ -11,7 +11,29 @@ export function AppShell() {
   const [selectedModel, setSelectedModel] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [graphPct, setGraphPct] = useState(45); // largura do grafo (%), arrastável entre 40 e 60
+  const mainRef = useRef<HTMLElement>(null);
   const conv = useConversation();
+
+  // Divisória arrastável chat/grafo (só no layout lg). Clampa o grafo em 40–60%.
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      const el = mainRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const pct = ((rect.right - ev.clientX) / rect.width) * 100;
+      setGraphPct(Math.min(60, Math.max(40, pct)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+    };
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
 
   useEffect(() => {
     fetchMe()
@@ -47,8 +69,8 @@ export function AppShell() {
           Não foi possível carregar a configuração: {error}
         </div>
       )}
-      <main className="grid flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[1fr_45%]">
-        <section className="min-h-0 border-r border-borderc bg-surfaceMuted">
+      <main ref={mainRef} className="flex flex-1 overflow-hidden">
+        <section className="min-h-0 flex-1 border-r border-borderc bg-surfaceMuted">
           <ChatPanel
             messages={conv.messages}
             streaming={conv.streaming}
@@ -58,7 +80,9 @@ export function AppShell() {
             onSend={(text) => conv.send(text, selectedModel)}
           />
         </section>
-        <aside className="hidden min-h-0 lg:block">
+        <div onMouseDown={startDrag} title="Arraste para redimensionar"
+          className="hidden w-1 shrink-0 cursor-col-resize bg-borderc hover:bg-primary lg:block" />
+        <aside className="hidden min-h-0 shrink-0 lg:block" style={{ width: `${graphPct}%` }}>
           <GraphPanel
             graph={conv.graph}
             onPromote={conv.promoteNodes}

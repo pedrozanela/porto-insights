@@ -31,6 +31,7 @@ class GenieResult:
     sql: str | None = None
     item_id: str | None = None
     columns: list[str] = field(default_factory=list)
+    column_types: list[str] = field(default_factory=list)  # type_name do UC por coluna (best-effort)
     rows: list[list[Any]] = field(default_factory=list)
     truncated: bool = False
     # links citados no corpo (label, url) — fontes e "Explore in Databricks"
@@ -114,7 +115,10 @@ async def run_genie_ask(
                     if status == "completed" and result.item_id:
                         try:
                             qr = await _get_query_result(s, cid, rid, result.item_id)
-                            result.columns = [c.get("name", "") for c in (qr.get("columns") or [])]
+                            cols = qr.get("columns") or []
+                            result.columns = [c.get("name", "") for c in cols]
+                            result.column_types = [
+                                str(c.get("type_name") or c.get("type_text") or "") for c in cols]
                             result.rows = (qr.get("rows") or [])[:max_rows_to_llm]
                             result.truncated = bool(qr.get("truncated"))
                         except Exception:  # noqa: BLE001

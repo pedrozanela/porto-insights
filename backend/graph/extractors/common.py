@@ -95,6 +95,28 @@ def person_id(email: str) -> str:
     return f"person:{email.lower()}"
 
 
+_AUTOMATED = ("noreply", "no-reply", "donotreply", "do-not-reply", "notifications",
+              "notification", "calendar-notification", "mailer-daemon", "automated")
+
+
+def is_automated_sender(name: str, email: str) -> bool:
+    """Remetentes automáticos (Gemini, noreply, notifications@, calendar-notification…)."""
+    n, e = (name or "").lower(), (email or "").lower()
+    if n in ("gemini", "google calendar", "google agenda"):
+        return True
+    return any(tok in e for tok in _AUTOMATED)
+
+
+def display_name(name: str, email: str) -> str:
+    """Rótulo de pessoa — NUNCA um email. Usa displayName; senão deriva do local part."""
+    name = (name or "").strip()
+    if name and "@" not in name and normalize_title(name) != normalize_title(email):
+        return name
+    local = (email or "").split("@")[0]
+    parts = re.split(r"[._\-]+", local)
+    return " ".join(p.capitalize() for p in parts if p) or email
+
+
 def email_id(message_id: str) -> str:
     return f"gmail:{message_id}"
 

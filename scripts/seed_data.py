@@ -208,7 +208,7 @@ def gen_metas(carteira: list[tuple]) -> list[tuple]:
     for (comp, produto_id, segmento, _saldo, orig, inad, _qtd) in carteira:
         is_demo_now = produto_id == DEMO_PRODUTO_ID and comp == CURRENT_MONTH
         if is_demo_now:
-            meta_orig = round(orig / 1.18, 2)          # actual ~18% above target
+            meta_orig = round(orig / 1.176, 2)         # ~117,6% da meta (valor não redondo)
             meta_inad_max = round(max(0.5, inad - 1.4), 2)   # actual breaches the ceiling
         else:
             meta_orig = round(orig * rng.uniform(0.94, 1.09), 2)
