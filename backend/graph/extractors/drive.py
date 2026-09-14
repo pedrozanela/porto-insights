@@ -30,7 +30,7 @@ def _upsert_file_node(state: GraphState, added_n, fid: str, label: str, url: str
     node_id = drive_id(fid)
     existing = state.nodes.get(node_id)
     if existing:
-        if name and name != "(documento)":  # upgrade do stub com metadados reais
+        if name and name not in ("(documento)", "(arquivo)", "Documento sem título"):  # upgrade do stub
             existing.label = label
             existing.props.update({"name": name, "title": name, "mimeType": mime, "stub": False})
             if url:
@@ -48,7 +48,7 @@ def drive_file_from_url(state: GraphState, added_n, fid: str, url: str, turn: in
     node_id = drive_id(fid)
     if node_id in state.nodes:
         return node_id
-    node = GraphNode(id=node_id, type="drive_file", label="(documento)", source="drive", url=url,
+    node = GraphNode(id=node_id, type="drive_file", label="Documento sem título", source="drive", url=url,
                      first_seen_turn=turn, props={"file_id": fid, "stub": True, "staged": True})
     state.add_node(node)
     added_n.append(node)

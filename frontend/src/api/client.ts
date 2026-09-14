@@ -11,6 +11,30 @@ export interface MeResponse {
   models: ModelInfo[];
   default_model: string;
   google_services: string[];
+  debug_graph?: boolean;
+}
+
+export interface DebugGraphRow {
+  id: string;
+  type: string;
+  label: string;
+  visible: boolean;
+  first_seen_turn: number;
+  reason: string | null;
+  staged_participants?: number | null;
+}
+
+export interface DebugGraph {
+  visible: DebugGraphRow[];
+  staging: DebugGraphRow[];
+  edges: { source: string; target: string; type: string; visible: boolean }[];
+  counts: { visible: number; staging: number; edges: number };
+}
+
+export async function fetchDebugGraph(conversationId: string): Promise<DebugGraph> {
+  const res = await fetch(`/api/debug/graph/${encodeURIComponent(conversationId)}`);
+  if (!res.ok) throw new Error(`GET /api/debug/graph falhou: ${res.status}`);
+  return res.json();
 }
 
 export async function fetchMe(): Promise<MeResponse> {

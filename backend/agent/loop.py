@@ -22,7 +22,7 @@ from ..graph.extractors.genie import extract_genie
 from ..graph.linker import (
     NODE_CREATING_TOOLS, deterministic_links, extract_from_tool, reconcile_provisionals, semantic_links,
 )
-from ..graph.promotion import promote, visible_delta
+from ..graph.promotion import enforce_no_orphans, promote, visible_delta
 from ..graph.schema import GraphNode, delta_payload, is_visible
 from ..graph.suggestions import build_suggestions
 from ..graph.store import GraphStore
@@ -112,6 +112,48 @@ async def _enrich_data_assets(user, state) -> None:
             logger.info("enrich_data_assets: tables.get(%s) indisponível (%s) — mantendo nome técnico",
                         fq, type(e).__name__)
         n.props["uc_resolved"] = True
+
+
+def _drive_arg_name(registry, tool: str) -> str:
+    """Nome do parâmetro de id do arquivo no schema da tool (fileId/document_id/id/…)."""
+    schema = next((t["function"]["parameters"] for t in (registry.openai_tools if registry else [])
+                   if t["function"]["name"] == tool), {}) or {}
+    props = schema.get("properties", {}) or {}
+    for k in props:
+        kl = k.lower()
+        if "fileid" in kl.replace("_", "") or "documentid" in kl.replace("_", "") or kl in ("id", "file_id"):
+            return k
+    return "file_id"
+
+
+async def _enrich_drive_stubs(user, state, turn, registry) -> None:
+    """Item 4: anexos do Calendar que chegaram só com fileUrl/fileId (stub) ganham título e
+    mimeType via Drive (files.get / metadata, OBO). Cache por id, no máx. 5 por turno.
+    Fallback de rótulo: 'Documento sem título' — nunca '(documento)'."""
+    if not registry:
+        return
+    tool = next((n for n, s in registry.service_name.items()
+                 if s == "drive" and n in ("google_file_metadata", "google_file_read", "google_file_download")), None)
+    if not tool:
+        return
+    url = registry.service_url.get(tool)
+    arg = _drive_arg_name(registry, tool)
+    stubs = [n for n in state.nodes.values()
+             if n.type == "drive_file" and n.props.get("stub") and not n.props.get("stub_resolved")]
+    for n in stubs[:5]:
+        fid = n.props.get("file_id")
+        if fid:
+            try:
+                async with mcp_session(url, user.token, timeout=45) as s:
+                    data = structured(await s.call_tool(tool, {arg: fid}))
+                new_nodes, _ = extract_from_tool(state, "drive", tool, data, turn)
+                for nn in new_nodes:  # metadados adicionais (ex.: dono) entram em staging
+                    nn.props["staged"] = True
+            except Exception as e:  # noqa: BLE001
+                logger.info("enrich_drive_stubs: %s falhou (%s)", fid, type(e).__name__)
+        if not n.label or n.label == "(documento)":
+            n.label = "Documento sem título"
+        n.props["stub_resolved"] = True
 
 
 async def _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry) -> None:
@@ -287,6 +329,10 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
             if not tool_calls:
                 final_answer = content  # só a última iteração (sem tool) é a resposta
                 break
+            # Rede de segurança: se o teto de iterações for atingido com tools ainda pendentes,
+            # não perca o texto — sem final_answer o casamento por título não promove nada.
+            if content:
+                final_answer = content
 
             used_tools = True
             tool_call_count += len(tool_calls)
@@ -350,15 +396,20 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                                    for n in state.nodes.values()):
                 await _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry)
 
+            # Item 4: resolve título/mimeType de anexos que vieram só como stub (fileUrl/fileId).
+            await _enrich_drive_stubs(user, state, turn, registry)
+
             # Reconciliação ANTES da promoção: funde provisório→real (reaponta notes_of) para a
             # promoção ver o evento real já unificado.
             _, removed = reconcile_provisionals(state, turn)
             # Linker semântico (vê todos os nós, inclusive staging) → related_to, mentions e
-            # relevant_node_ids (promoção b).
+            # relevant_node_ids. Determinístico ANTES da promoção: cria links_to/same_time_window
+            # para o fechamento estrutural e o invariante sem-órfãos verem todas as arestas.
             sem_nodes, sem_edges, relevant_ids = await semantic_links(
                 client, model, state, turn, settings.semantic_linker_min_confidence,
                 answer_text=final_answer)
-            # Promoção por evidência + colapso de participantes.
+            deterministic_links(state, turn, settings.time_window_days)
+            # Promoção por evidência (semente + fechamento estrutural + colapso + anexos).
             promoted_ids = promote(state, answer_text=final_answer, relevant_ids=relevant_ids,
                                    asked_text=user_message)
 
@@ -378,8 +429,9 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
             # B4: rótulo do data_asset a partir do comentário do Unity Catalog (OBO), best-effort.
             await _enrich_data_assets(user, state)
 
-            deterministic_links(state, turn, settings.time_window_days)
             _mark_self(state, user.email)  # Bloco 2
+            # Invariante sem-órfãos sobre o grafo FINAL do turno (todas as arestas já existem).
+            enforce_no_orphans(state, asked_text=user_message)
 
             vis_nodes, vis_edges = visible_delta(state)
             newly = [nid for nid in {n.id for n in vis_nodes} - before_visible]

@@ -51,13 +51,16 @@ class Settings(BaseSettings):
     mcp_tool_denylist_extra: str = ""
 
     # Agente / grafo
-    agent_max_tool_iterations: int = 8
+    agent_max_tool_iterations: int = 14
     semantic_linker_min_confidence: float = 0.6
     time_window_days: int = 3
 
     # Observabilidade
     mlflow_experiment_path: str = ""
     log_level: str = "INFO"
+
+    # Depuração do grafo: painel de staging + GET /api/debug/graph (só ligar em dev local).
+    debug_graph: bool = Field(default=False, alias="DEBUG_GRAPH")
 
     @field_validator("databricks_host")
     @classmethod

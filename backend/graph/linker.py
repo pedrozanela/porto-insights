@@ -18,7 +18,7 @@ from .extractors.calendar import extract_calendar
 from .extractors.common import drive_id, extract_drive_ids, normalize_title, provisional_person_id
 from .extractors.drive import extract_drive
 from .extractors.gmail import extract_gmail
-from .schema import GraphEdge, GraphNode, GraphState
+from .schema import GraphEdge, GraphNode, GraphState, is_visible
 
 logger = logging.getLogger("porto_insights.graph.linker")
 
@@ -197,11 +197,16 @@ async def semantic_links(
     nodes = list(state.nodes.values())
     if len(nodes) < 2 and not answer_text:
         return [], [], set()
-    listing = "\n".join(f'- {{"id": "{n.id}", "tipo": "{n.type}", "rotulo": "{n.label[:50]}"}}' for n in nodes)
+    # Cap na listagem: com uma semana de agenda o staging tem dezenas de nós e a saída JSON do
+    # modelo estourava o max_tokens (truncava → JSON inválido → relevant_ids vazio). Prioriza
+    # visíveis e os mais recentes; limita o total para caber na resposta.
+    nodes_sorted = sorted(nodes, key=lambda n: (is_visible(n), n.first_seen_turn), reverse=True)
+    listing_nodes = nodes_sorted[:80]
+    listing = "\n".join(f'- {{"id": "{n.id}", "tipo": "{n.type}", "rotulo": "{n.label[:50]}"}}' for n in listing_nodes)
     prompt = SEMANTIC_PROMPT + listing + f"\n\nTEXTO DA RESPOSTA:\n{answer_text[:2000]}"
     try:
         resp = await client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": prompt}], max_tokens=700)
+            model=model, messages=[{"role": "user", "content": prompt}], max_tokens=1500)
         content = resp.choices[0].message.content or "{}"
         content = content[content.find("{"): content.rfind("}") + 1] or "{}"
         data = json.loads(content)

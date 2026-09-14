@@ -23,7 +23,7 @@ env:
   - name: MCP_GOOGLE_SERVICES
     value: "system.ai.gmail,system.ai.google_calendar,system.ai.google_drive"
   - name: AGENT_MAX_TOOL_ITERATIONS
-    value: "8"
+    value: "14"
   - name: SEMANTIC_LINKER_MIN_CONFIDENCE
     value: "0.6"
   - name: TIME_WINDOW_DAYS

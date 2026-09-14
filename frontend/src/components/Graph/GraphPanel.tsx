@@ -5,6 +5,7 @@ import type { GraphData, GraphNode } from "../../state/types";
 import { shortLabel, EDGE_LABELS } from "../../graph/labels";
 import { glyph, glyphType } from "../../graph/glyphs";
 import { NodeDetail } from "./NodeDetail";
+import { fetchDebugGraph, type DebugGraph } from "../../api/client";
 
 const SELF_COLOR = "#005bbf";
 
@@ -12,10 +13,14 @@ export function GraphPanel({
   graph,
   onAskAbout,
   onPromote,
+  debugGraph = false,
+  conversationId = "",
 }: {
   graph: GraphData;
   onAskAbout: (node: GraphNode) => void;
   onPromote: (ids: string[]) => void;
+  debugGraph?: boolean;
+  conversationId?: string;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -26,6 +31,7 @@ export function GraphPanel({
   const [hideSelf, setHideSelf] = useState(false);
   const [hoverEdge, setHoverEdge] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [staging, setStaging] = useState<DebugGraph | null>(null); // painel de staging (dev)
   const manualRef = useRef(false); // usuário deu pan/zoom → suspende auto-fit
   const highlightUntil = useRef(0);
   const [, forceTick] = useState(0);
@@ -136,6 +142,17 @@ export function GraphPanel({
         {!empty && (
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted">{visibleCount} nós</span>
+            {debugGraph && (
+              <button
+                onClick={async () => {
+                  if (staging) { setStaging(null); return; }
+                  try { setStaging(await fetchDebugGraph(conversationId)); }
+                  catch { /* debug off */ }
+                }}
+                className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 hover:bg-amber-100">
+                Staging
+              </button>
+            )}
             <button onClick={() => { manualRef.current = false; fitToScreen(); }}
               className="rounded-md border border-borderc px-2 py-1 text-xs text-textc hover:bg-surfaceMuted">
               Ajustar à tela
@@ -294,6 +311,21 @@ export function GraphPanel({
                   {fullscreen ? "Sair" : "Expandir"}
                 </button>
               </div>
+              {staging && (
+                <div className="absolute left-3 top-3 max-h-[80%] w-72 overflow-auto rounded-lg border border-borderc bg-surface/97 p-2 text-xs shadow-lg">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="font-semibold text-textc">Staging ({staging.counts.staging})</span>
+                    <button onClick={() => setStaging(null)} className="text-muted hover:text-textc">✕</button>
+                  </div>
+                  {staging.staging.length === 0 && <p className="text-muted">Nenhum nó em staging.</p>}
+                  {staging.staging.map((r) => (
+                    <div key={r.id} className="border-b border-borderc py-1">
+                      <div className="text-textc">{r.label} <span className="text-muted">· {r.type}</span></div>
+                      <div className="text-muted">turno {r.first_seen_turn} — {r.reason || "—"}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
               {selected && (
                 <NodeDetail node={selected} graph={graph}
                   onAskAbout={(n) => { onAskAbout(n); setSelected(null); }}

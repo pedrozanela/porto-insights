@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -84,6 +84,7 @@ def me(user: UserContext = Depends(get_user_context)) -> dict:
         "models": [{"name": e.name, "label": e.label} for e in settings.endpoints],
         "default_model": settings.default_endpoint,
         "google_services": settings.google_services,
+        "debug_graph": settings.debug_graph,
     }
 
 
@@ -108,6 +109,15 @@ def promote_graph(req: PromoteRequest, user: UserContext = Depends(get_user_cont
     newly = promote_ids(state, req.node_ids)
     vis_nodes, vis_edges = visible_delta(state)
     return delta_payload(vis_nodes, vis_edges, turn=0, promoted_node_ids=list(newly))
+
+
+@app.get("/api/debug/graph/{conversation_id}")
+def debug_graph(conversation_id: str, user: UserContext = Depends(get_user_context)) -> dict:
+    """Item 5: retrato do grafo (visíveis + staging + motivos). Só quando DEBUG_GRAPH=true."""
+    if not settings.debug_graph:
+        raise HTTPException(status_code=404, detail="debug desabilitado")
+    from .graph.promotion import debug_snapshot
+    return debug_snapshot(graph_store.get(user.email, conversation_id))
 
 
 @app.get("/api/conversations")

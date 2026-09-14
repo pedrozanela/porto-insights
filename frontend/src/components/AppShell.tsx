@@ -85,6 +85,8 @@ export function AppShell() {
         <aside className="hidden min-h-0 shrink-0 lg:block" style={{ width: `${graphPct}%` }}>
           <GraphPanel
             graph={conv.graph}
+            debugGraph={me?.debug_graph ?? false}
+            conversationId={conv.conversationId}
             onPromote={conv.promoteNodes}
             onAskAbout={(node) => {
               const kind = { calendar_event: "o evento", email: "o email", email_thread: "a thread",
