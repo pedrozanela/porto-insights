@@ -158,6 +158,12 @@ export function GraphPanel({
       hover: (id: string | null) => { focusPinnedRef.current = false; focusIdRef.current = id; bumpAnim(); },
       fit: () => { manualRef.current = false; fitToScreen(); },
       list: () => graph.nodes.map((n) => ({ id: n.id, type: n.type, label: n.label })),
+      screenOf: (id: string) => {
+        const n = nodeObjs.current.get(id);
+        if (!n || typeof n.x !== "number" || !fgRef.current?.graph2ScreenCoords) return null;
+        return fgRef.current.graph2ScreenCoords(n.x, n.y);
+      },
+      curFocus: () => focusIdRef.current,
       focar: (id: string) => { const n = graph.nodes.find((x) => x.id === id); if (n) enterLocal(n); },
       depth: (d: number) => setLocalDepth(d),
       exitLocal,
