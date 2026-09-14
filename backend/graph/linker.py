@@ -20,7 +20,8 @@ from .extractors.calendar import extract_calendar
 from .extractors.common import drive_id, extract_drive_ids, normalize_title, provisional_person_id
 from .extractors.drive import extract_drive
 from .extractors.gmail import extract_gmail
-from .schema import GraphEdge, GraphNode, GraphState, is_visible
+from .schema import GraphEdge, GraphNode, GraphState
+from ..llm import _delta_text  # extrai texto de content que pode vir como lista de blocos (Claude)
 
 logger = logging.getLogger("porto_insights.graph.linker")
 
@@ -237,7 +238,8 @@ async def _call_linker(client, model: str, prompt: str) -> tuple[dict | None, st
         try:
             resp = await client.chat.completions.create(
                 model=model, messages=[{"role": "user", "content": prompt}], max_tokens=1500, **kwargs)
-            content = resp.choices[0].message.content or ""
+            # content pode vir como str OU lista de blocos (Claude no Databricks) → _delta_text.
+            content = _delta_text(resp.choices[0].message.content)
             frag = content[content.find("{"): content.rfind("}") + 1]
             return json.loads(frag), mode, None
         except TypeError:

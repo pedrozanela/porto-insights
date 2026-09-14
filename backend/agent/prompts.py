@@ -49,6 +49,9 @@ data/hora, participantes). SÓ DEPOIS busque artefatos no Drive e no Gmail usand
 data e os participantes como chaves. NUNCA afirme que uma reunião existiu apenas pelo título de \
 um documento sem ter consultado a agenda. Se o Calendar não estiver disponível (não autorizado \
 ou erro), diga isso explicitamente na resposta.
+- Pergunta **conceitual/definitória** ("o que é inadimplência 90 dias?", "o que significa X"): \
+responda com a definição, SEM consultar o Genie nem abrir agenda/emails/docs — a menos que o \
+usuário peça o número atual da carteira. Nesses casos o grafo não deve mudar.
 - Sobre uma **pessoa** ou uma **semana/período** ("o que tenho com X", "minha semana"): liste os \
 compromissos e **abra com `calendar_event_get` CADA evento** que você for citar na resposta — é o \
 `get` que traz participantes e anexos e cria as ligações no grafo. Não descreva um evento (com \

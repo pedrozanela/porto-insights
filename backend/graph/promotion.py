@@ -209,49 +209,57 @@ def _promote_attachments(state: GraphState, ev, promoted: set[str], limit: int =
 
 def _seed(state: GraphState, answer_text: str, answer_norm: str, answer_drive_ids: set[str],
           relevant_ids: set[str], question_norm: str, promoted: set[str], primary: set[str]) -> None:
-    # nós não-evento: referência (inclui título), relevância do linker, ou pessoa-assunto.
+    # Nós não-evento. PESSOAS: só por referência na resposta ou por serem o assunto da pergunta —
+    # NUNCA por relevant_ids do linker (o colapso é quem decide quais participantes aparecem; senão
+    # o linker despeja a lista inteira). Demais (doc/genie/email/thread): referência ou relevant_ids.
     for n in list(state.nodes.values()):
         if n.type == "calendar_event" or is_visible(n):
             continue
         if _references(n, answer_text, answer_norm, answer_drive_ids):
             _set_visible(n, promoted, "referência na resposta"); primary.add(n.id)
+        elif n.type == "person":
+            if _is_subject(n, question_norm):
+                _set_visible(n, promoted, "assunto da pergunta"); primary.add(n.id)
         elif n.id in relevant_ids:
             _set_visible(n, promoted, "relevante (linker)"); primary.add(n.id)
-        elif n.type == "person" and _is_subject(n, question_norm):
-            _set_visible(n, promoted, "assunto da pergunta"); primary.add(n.id)
 
-    # eventos: relevância / notas de doc visível, depois casamento por título (1ª classe).
-    notes_event_of_visible_doc = {
+    # Eventos: candidato = título citado (1ª classe) OU relevante (linker) OU notas de doc visível.
+    # Recorrentes SEMPRE passam pela desambiguação (data citada; senão a instância mais próxima),
+    # inclusive quando o linker marca várias instâncias como relevantes.
+    notes_events = {
         e.target for e in state.edges.values()
         if e.type == "notes_of" and e.source in state.nodes and is_visible(state.nodes[e.source])
     }
-    events = [n for n in state.nodes.values() if n.type == "calendar_event" and not is_visible(n)]
-    for ev in events:
-        if ev.id in relevant_ids:
-            _set_visible(ev, promoted, "relevante (linker)"); primary.add(ev.id)
-        elif ev.id in notes_event_of_visible_doc:
-            _set_visible(ev, promoted, "notas de evento visível"); primary.add(ev.id)
-
     cited = _cited_daymonths(answer_text)
+    events = [n for n in state.nodes.values() if n.type == "calendar_event" and not is_visible(n)]
     by_title: dict[str, list] = {}
     for ev in events:
         by_title.setdefault(normalize_title(ev.props.get("summary") or ev.label), []).append(ev)
+
     for title, evs in by_title.items():
-        if len(title) <= 4 or title not in answer_norm:
+        title_cited = len(title) > 4 and title in answer_norm
+        cands = [e for e in evs if not is_visible(e)
+                 and (title_cited or e.id in relevant_ids or e.id in notes_events)]
+        if not cands:
             continue
-        staged = [e for e in evs if not is_visible(e)]
-        if not staged:
-            continue
+
+        def _reason(e, dated=False) -> str:
+            if title_cited:
+                return "título + data citados" if dated else "título citado na resposta"
+            return "relevante (linker)" if e.id in relevant_ids else "notas de evento visível"
+
         if len(evs) == 1:
-            _set_visible(staged[0], promoted, "título citado na resposta"); primary.add(staged[0].id)
-        else:  # recorrente: desambigua por data citada; senão, a instância mais próxima de hoje
-            date_conf = [e for e in staged if _event_daymonth(e) in cited]
-            targets = date_conf or [min(staged, key=_days_from_today)]
-            reason = "título + data citados" if date_conf else "recorrente: instância mais próxima de hoje"
+            _set_visible(cands[0], promoted, _reason(cands[0])); primary.add(cands[0].id)
+        else:  # recorrente → desambigua sempre
+            date_conf = [e for e in cands if _event_daymonth(e) in cited]
+            targets = date_conf or [min(cands, key=_days_from_today)]
             for e in targets:
-                _set_visible(e, promoted, reason); primary.add(e.id)
-            for e in staged:
-                if e not in targets:
+                _set_visible(e, promoted,
+                             _reason(e, dated=bool(date_conf)) if title_cited
+                             else "recorrente: instância mais próxima de hoje")
+                primary.add(e.id)
+            for e in evs:
+                if not is_visible(e) and not e.props.get("promotion_reason"):
                     e.props["promotion_reason"] = "instância recorrente não citada"
 
 
