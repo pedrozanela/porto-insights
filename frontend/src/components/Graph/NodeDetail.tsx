@@ -6,6 +6,7 @@ interface Props {
   graph: GraphData;
   onAskAbout: (node: GraphNode) => void;
   onPromote: (ids: string[]) => void;
+  onFocus: (node: GraphNode) => void;
   onClose: () => void;
 }
 
@@ -13,7 +14,7 @@ const SOURCE_LABEL: Record<string, string> = {
   gmail: "Gmail", calendar: "Google Agenda", drive: "Google Drive", genie: "Genie One",
 };
 
-export function NodeDetail({ node, graph, onAskAbout, onPromote, onClose }: Props) {
+export function NodeDetail({ node, graph, onAskAbout, onPromote, onFocus, onClose }: Props) {
   const stagedPeople = (node.props?.staged_people as { id: string; name: string }[] | undefined) ?? [];
   // Vizinhos: nós ligados por qualquer aresta.
   const neighborIds = new Set<string>();
@@ -90,6 +91,12 @@ export function NodeDetail({ node, graph, onAskAbout, onPromote, onClose }: Prop
           className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primaryDark"
         >
           Perguntar sobre isso
+        </button>
+        <button
+          onClick={() => onFocus(node)}
+          className="rounded-lg border border-borderc px-3 py-1.5 text-sm text-textc hover:bg-surfaceMuted"
+        >
+          Focar
         </button>
         {node.url && (
           <a

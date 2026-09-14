@@ -4,7 +4,7 @@ import { graph as G, nodeColors, nodeLabels } from "../../theme";
 import type { GraphData, GraphNode } from "../../state/types";
 import { shortLabel, EDGE_LABELS } from "../../graph/labels";
 import { glyph, glyphType } from "../../graph/glyphs";
-import { buildNeighbors, degreeMap } from "../../graph/graphModel";
+import { bfs, buildNeighbors, degreeMap } from "../../graph/graphModel";
 import {
   edgeDash, lodBand, lodThresholds, nodeColor, radiusOf, resolveLinkState, resolveNodeState,
   showEdgeLabel, showIcon, showNodeLabel, type StyleCtx,
@@ -32,12 +32,14 @@ export function GraphPanel({
   onPromote,
   debugGraph = false,
   conversationId = "",
+  streaming = false,
 }: {
   graph: GraphData;
   onAskAbout: (node: GraphNode) => void;
   onPromote: (ids: string[]) => void;
   debugGraph?: boolean;
   conversationId?: string;
+  streaming?: boolean;
 }) {
   const graph = useMemo(() => fixtureFromUrl() ?? graphProp, [graphProp]);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -49,6 +51,9 @@ export function GraphPanel({
   const [hideSelf, setHideSelf] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [staging, setStaging] = useState<DebugGraph | null>(null);
+  // Bloco B (Focar / vizinhança local) e Bloco C (Reproduzir)
+  const [localMode, setLocalMode] = useState<{ rootId: string; label: string; depth: number; nodeIds: Set<string> } | null>(null);
+  const [replay, setReplay] = useState<{ turn: number; playing: boolean; speed: number } | null>(null);
 
   // Estado de INTERAÇÃO em refs (lidos dentro de nodeCanvasObject/linkCanvasObject) — sem setState
   // por frame/hover; o redesenho é dirigido pelo loop de refresh (animateUntil).
@@ -97,14 +102,14 @@ export function GraphPanel({
     return { nodes, links };
   }, [graph, hidden, hideSelf]);
 
-  // contexto de estilo montado a partir dos REFS (localMode/replay entram nos próximos blocos)
+  // contexto de estilo: foco vem de refs (hover/click), localMode/replay de state (mudam raramente)
   const buildCtx = (): StyleCtx => ({
     focusNodeId: focusIdRef.current,
     focusPinned: focusPinnedRef.current,
     focusNeighbors: focusIdRef.current ? (neighbors.get(focusIdRef.current) ?? new Set<string>()) : new Set<string>(),
-    localMode: null,
-    replay: null,
-    recentTurn: graph.lastTurn,
+    localMode,
+    replay: replay ? { turn: replay.turn } : null,
+    recentTurn: replay ? replay.turn : graph.lastTurn,   // no replay, o turno atual pulsa
     episode: null,
   });
 
@@ -152,6 +157,13 @@ export function GraphPanel({
       focus: (id: string) => { focusIdRef.current = id; focusPinnedRef.current = true; bumpAnim(); },
       hover: (id: string | null) => { focusPinnedRef.current = false; focusIdRef.current = id; bumpAnim(); },
       fit: () => { manualRef.current = false; fitToScreen(); },
+      list: () => graph.nodes.map((n) => ({ id: n.id, type: n.type, label: n.label })),
+      focar: (id: string) => { const n = graph.nodes.find((x) => x.id === id); if (n) enterLocal(n); },
+      depth: (d: number) => setLocalDepth(d),
+      exitLocal,
+      play: () => startReplay(),
+      goto: (turn: number) => setReplay((r) => (r ? { ...r, playing: false, turn } : { turn, playing: false, speed: 1 })),
+      endReplay,
     };
   });
 
@@ -224,11 +236,66 @@ export function GraphPanel({
 
   const clearFocus = () => { focusIdRef.current = null; focusPinnedRef.current = false; bumpAnim(); };
 
+  // --- Bloco B: Focar (vizinhança local por BFS sobre os nós VISÍVEIS) ---
+  const visibleIds = () => new Set((data.nodes as any[]).map((n) => n.id));
+  const computeLocal = (rootId: string, depth: number, label: string) =>
+    ({ rootId, label, depth, nodeIds: bfs(neighbors, rootId, depth, visibleIds()) });
+
+  const enterLocal = (node: GraphNode) => {
+    clearFocus();
+    setSelected(null);
+    setLocalMode(computeLocal(node.id, 1, node.label));
+  };
+  const setLocalDepth = (depth: number) =>
+    setLocalMode((lm) => (lm ? computeLocal(lm.rootId, depth, lm.label) : lm));
+  const exitLocal = () => setLocalMode(null);
+
+  useEffect(() => {   // ao entrar/mudar profundidade/sair do modo local, reenquadra
+    if (!data.nodes.length) return;
+    manualRef.current = false;
+    bumpAnim(700);
+    const t = setTimeout(fitToScreen, 60);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localMode]);
+
+  // --- Bloco C: Reproduzir ---
+  const canReplay = graph.turns.length > 1 && !streaming;
+  const startReplay = () => {
+    if (!canReplay) return;
+    clearFocus(); setSelected(null); setLocalMode(null);
+    setReplay({ turn: 1, playing: true, speed: 1 });
+  };
+  const endReplay = () => { setReplay(null); manualRef.current = false; bumpAnim(700); setTimeout(fitToScreen, 60); };
+  const stepReplay = (dir: number) =>
+    setReplay((r) => (r ? { ...r, playing: false, turn: Math.max(1, Math.min(graph.lastTurn, r.turn + dir)) } : r));
+  const togglePlay = () => setReplay((r) => (r ? { ...r, playing: !r.playing } : r));
+  const setSpeed = (s: number) => setReplay((r) => (r ? { ...r, speed: s } : r));
+
+  useEffect(() => {   // avança o replay e reenquadra os nós já revelados a cada passo
+    if (!replay) return;
+    manualRef.current = false;
+    bumpAnim(900);
+    const t = setTimeout(fitToScreen, 60);
+    let adv: number | undefined;
+    if (replay.playing && replay.turn < graph.lastTurn) {
+      adv = window.setTimeout(() => setReplay((r) => (r ? { ...r, turn: r.turn + 1 } : r)), 800 / replay.speed);
+    } else if (replay.playing && replay.turn >= graph.lastTurn) {
+      adv = window.setTimeout(() => setReplay((r) => (r ? { ...r, playing: false } : r)), 200);
+    }
+    return () => { clearTimeout(t); if (adv) clearTimeout(adv); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replay?.turn, replay?.playing, replay?.speed]);
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.4); }
     else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.4); }
     else if (e.key === "0") { e.preventDefault(); manualRef.current = false; fitToScreen(); }
-    else if (e.key === "Escape") { clearFocus(); setSelected(null); }
+    else if (e.key === "Escape") {
+      if (replay) endReplay();
+      else if (localMode) exitLocal();
+      else { clearFocus(); setSelected(null); }
+    }
   };
 
   const toggleType = (t: string) =>
@@ -405,6 +472,7 @@ export function GraphPanel({
                 onZoom={() => { manualRef.current = true; }}
                 onEngineStop={() => { releaseAllPins(); if (!manualRef.current) fitToScreen(); }}
                 onNodeHover={(n: any) => {
+                  if (replay) return;   // durante o replay o hover não muda o foco
                   if (!focusPinnedRef.current) { focusIdRef.current = n?.id ?? null; bumpAnim(); }
                 }}
                 onNodeClick={(n: any) => {
@@ -440,7 +508,64 @@ export function GraphPanel({
                   className="rounded-md border border-borderc bg-surface/95 px-2 py-1 text-xs text-textc shadow-sm hover:bg-surfaceMuted">
                   {fullscreen ? "Sair" : "Expandir"}
                 </button>
+                {!replay && (
+                  <button onClick={startReplay} disabled={!canReplay} title={canReplay ? "" : "Precisa de 2+ turnos"}
+                    className="rounded-md border border-borderc bg-surface/95 px-2 py-1 text-xs text-textc shadow-sm hover:bg-surfaceMuted disabled:opacity-40">
+                    Reproduzir
+                  </button>
+                )}
               </div>
+
+              {/* Bloco B: breadcrumb + profundidade do modo Focar */}
+              {localMode && (
+                <div className="absolute left-3 top-3 flex items-center gap-2 rounded-lg border border-borderc bg-surface/97 px-3 py-1.5 text-xs shadow-sm">
+                  <button onClick={exitLocal} className="text-muted hover:text-primary">Grafo completo</button>
+                  <span className="text-muted">›</span>
+                  <span className="font-medium text-textc">Focar em {localMode.label}</span>
+                  <span className="text-muted">· {localMode.nodeIds.size} objetos</span>
+                  <span className="ml-2 flex overflow-hidden rounded-md border border-borderc">
+                    {[1, 2, 3].map((d) => (
+                      <button key={d} onClick={() => setLocalDepth(d)}
+                        className={`px-1.5 py-0.5 ${localMode.depth === d ? "bg-primary text-white" : "text-textc hover:bg-surfaceMuted"}`}>
+                        {d}
+                      </button>
+                    ))}
+                  </span>
+                  <button onClick={exitLocal}
+                    className="ml-1 rounded-md border border-borderc px-2 py-0.5 text-textc hover:bg-surfaceMuted">
+                    Voltar ao grafo completo
+                  </button>
+                </div>
+              )}
+
+              {/* Bloco C: legenda + controles do Reproduzir */}
+              {replay && (
+                <>
+                  <div className="pointer-events-none absolute left-3 top-3 max-w-[60%] rounded-lg border border-borderc bg-surface/97 px-3 py-2 shadow-sm">
+                    <div className="text-xs font-semibold text-primary">Turno {replay.turn} de {graph.lastTurn}</div>
+                    <div className="mt-0.5 overflow-hidden text-sm text-textc"
+                      style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                      {graph.turns.find((t) => t.index === replay.turn)?.question ?? ""}
+                    </div>
+                  </div>
+                  <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-borderc bg-surface/97 px-2 py-1 text-xs shadow-sm">
+                    <button onClick={() => stepReplay(-1)} className="px-1.5 py-0.5 text-textc hover:bg-surfaceMuted" title="Anterior">‹</button>
+                    <button onClick={togglePlay} className="px-2 py-0.5 font-medium text-primary hover:bg-surfaceMuted">
+                      {replay.playing ? "Pausar" : "Continuar"}
+                    </button>
+                    <button onClick={() => stepReplay(1)} className="px-1.5 py-0.5 text-textc hover:bg-surfaceMuted" title="Próximo">›</button>
+                    <span className="mx-1 w-px self-stretch bg-borderc" />
+                    {[1, 2].map((s) => (
+                      <button key={s} onClick={() => setSpeed(s)}
+                        className={`px-1.5 py-0.5 ${replay.speed === s ? "text-primary font-semibold" : "text-muted hover:text-textc"}`}>
+                        {s}×
+                      </button>
+                    ))}
+                    <span className="mx-1 w-px self-stretch bg-borderc" />
+                    <button onClick={endReplay} className="px-2 py-0.5 text-textc hover:bg-surfaceMuted">Encerrar</button>
+                  </div>
+                </>
+              )}
 
               {staging && (
                 <div className="absolute left-3 top-3 max-h-[80%] w-72 overflow-auto rounded-lg border border-borderc bg-surface/97 p-2 text-xs shadow-lg">
@@ -469,6 +594,7 @@ export function GraphPanel({
                 <NodeDetail node={selected} graph={graph}
                   onAskAbout={(n) => { onAskAbout(n); setSelected(null); }}
                   onPromote={onPromote}
+                  onFocus={enterLocal}
                   onClose={() => { setSelected(null); clearFocus(); }} />
               )}
             </>

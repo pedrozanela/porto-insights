@@ -57,6 +57,25 @@ describe("resolveNodeState — precedência", () => {
   });
 });
 
+describe("Reproduzir — sequência de visibilidade por turno", () => {
+  const g = [node("a", 1), node("b", 2), node("c", 3), node("d", 4)];
+  const visibleIds = (turn: number) =>
+    g.filter((n) => resolveNodeState(n, ctxWith({ replay: { turn } })).visible).map((n) => n.id);
+
+  it("cada turno revela os nós até aquele turno (fixture de 4 turnos)", () => {
+    expect(visibleIds(1)).toEqual(["a"]);
+    expect(visibleIds(2)).toEqual(["a", "b"]);
+    expect(visibleIds(3)).toEqual(["a", "b", "c"]);
+    expect(visibleIds(4)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("nó que entra no turno atual pulsa (emphasis new) quando recentTurn = turno do replay", () => {
+    const ctx = ctxWith({ replay: { turn: 3 }, recentTurn: 3 });
+    expect(resolveNodeState(node("c", 3), ctx).emphasis).toBe("new");
+    expect(resolveNodeState(node("b", 2), ctx).emphasis).toBe("normal");
+  });
+});
+
 describe("resolveLinkState", () => {
   const vis = { visible: true, alpha: 1, emphasis: "normal" as const };
   const dim = { visible: true, alpha: 0.15, emphasis: "normal" as const };

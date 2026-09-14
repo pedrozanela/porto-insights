@@ -87,6 +87,7 @@ export function AppShell() {
             graph={conv.graph}
             debugGraph={me?.debug_graph ?? false}
             conversationId={conv.conversationId}
+            streaming={conv.streaming}
             onPromote={conv.promoteNodes}
             onAskAbout={(node) => {
               const kind = { calendar_event: "o evento", email: "o email", email_thread: "a thread",

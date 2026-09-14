@@ -68,9 +68,15 @@ export interface GraphEdge {
   first_seen_turn: number;
 }
 
+export interface GraphTurn {
+  index: number;     // número do turno (1-based), casa com first_seen_turn dos nós
+  question: string;  // pergunta do usuário naquele turno (para a legenda do "Reproduzir")
+}
+
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
   lastTurn: number;
   promoted: string[]; // ids que passaram a visíveis no último delta (para animar)
+  turns: GraphTurn[]; // histórico turno→pergunta (para o "Reproduzir")
 }

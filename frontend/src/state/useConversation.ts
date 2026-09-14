@@ -9,7 +9,7 @@ function newConversationId(): string {
   return `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const EMPTY_GRAPH: GraphData = { nodes: [], edges: [], lastTurn: 0, promoted: [] };
+const EMPTY_GRAPH: GraphData = { nodes: [], edges: [], lastTurn: 0, promoted: [], turns: [] };
 
 export function useConversation() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -44,7 +44,7 @@ export function useConversation() {
       edges.forEach((e) => eById.set(e.id, e));
       const alive = new Set(byId.keys());
       for (const [id, e] of [...eById]) if (!alive.has(e.source) || !alive.has(e.target)) eById.delete(id);
-      return { nodes: [...byId.values()], edges: [...eById.values()], lastTurn: turn || g.lastTurn, promoted };
+      return { nodes: [...byId.values()], edges: [...eById.values()], lastTurn: turn || g.lastTurn, promoted, turns: g.turns };
     });
 
   // Move a narração pendente (texto antes de uma tool) para o trace, tirando-a da resposta.
@@ -75,6 +75,7 @@ export function useConversation() {
       setWarning(null);
       setSuggestions([]);
       setMessages((m) => [...m, { role: "user", content: trimmed }, { role: "assistant", content: "" }]);
+      setGraph((g) => ({ ...g, turns: [...g.turns, { index: g.turns.length + 1, question: trimmed }] }));
       setStreaming(true);
 
       const abort = new AbortController();

@@ -37,7 +37,9 @@ export function devFixture(n: number): GraphData {
     const a = Math.floor(rnd() * nodes.length), b = Math.floor(rnd() * nodes.length);
     if (a !== b) edges.push(edge(nodes[a].id, nodes[b].id, "links_to"));
   }
-  return { nodes, edges, lastTurn: 1, promoted: [] };
+  const maxTurn = nodes.reduce((m, n) => Math.max(m, n.first_seen_turn), 1);
+  const turns = Array.from({ length: maxTurn }, (_, i) => ({ index: i + 1, question: `Pergunta do turno ${i + 1}` }));
+  return { nodes, edges, lastTurn: maxTurn, promoted: [], turns };
 }
 
 function edge(source: string, target: string, type: string): GraphEdge {
