@@ -1,16 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
-import { nodeColors, nodeLabels } from "../../theme";
+import { graph as G, nodeColors, nodeLabels } from "../../theme";
 import type { GraphData, GraphNode } from "../../state/types";
 import { shortLabel, EDGE_LABELS } from "../../graph/labels";
 import { glyph, glyphType } from "../../graph/glyphs";
+import { buildNeighbors, degreeMap } from "../../graph/graphModel";
+import {
+  edgeDash, lodBand, nodeColor, radiusOf, resolveLinkState, resolveNodeState,
+  showEdgeLabel, showIcon, showNodeLabel, type StyleCtx,
+} from "../../graph/graphStyle";
+import { configureForces, pinAfterDrag, reheatWithPins } from "../../graph/graphPhysics";
+import { fixtureFromUrl } from "../../graph/graphFixture";
 import { NodeDetail } from "./NodeDetail";
 import { fetchDebugGraph, type DebugGraph } from "../../api/client";
 
-const SELF_COLOR = "#005bbf";
+const MIN_ZOOM = 0.2, MAX_ZOOM = 8;
+
+// medidor de texto compartilhado (largura de rótulo para colisão/fit/colisão física)
+const _measure = document.createElement("canvas").getContext("2d");
+function labelWidth(text: string, px: number): number {
+  if (!_measure) return text.length * px * 0.6;
+  _measure.font = `${px}px system-ui`;
+  return _measure.measureText(text).width;
+}
 
 export function GraphPanel({
-  graph,
+  graph: graphProp,
   onAskAbout,
   onPromote,
   debugGraph = false,
@@ -22,6 +37,7 @@ export function GraphPanel({
   debugGraph?: boolean;
   conversationId?: string;
 }) {
+  const graph = useMemo(() => fixtureFromUrl() ?? graphProp, [graphProp]); // dev: ?fixture=N
   const rootRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
@@ -29,15 +45,74 @@ export function GraphPanel({
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [hideSelf, setHideSelf] = useState(false);
-  const [hoverEdge, setHoverEdge] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const [staging, setStaging] = useState<DebugGraph | null>(null); // painel de staging (dev)
-  const manualRef = useRef(false); // usuário deu pan/zoom → suspende auto-fit
-  const highlightUntil = useRef(0);
-  const [, forceTick] = useState(0);
+  const [staging, setStaging] = useState<DebugGraph | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const [focusPinned, setFocusPinned] = useState(false);
 
-  const MIN_ZOOM = 0.2, MAX_ZOOM = 8;
+  const manualRef = useRef(false);                 // usuário deu pan/zoom → suspende auto-fit
+  const alphaRef = useRef<Map<string, number>>(new Map());  // alpha suavizado por nó
+  const animateUntil = useRef(0);                  // dispara refresh() até este instante
 
+  // --- estrutura (recalculada só quando o grafo muda, não por frame) ---
+  const degree = useMemo(() => degreeMap(graph.edges), [graph.edges]);
+  const neighbors = useMemo(() => buildNeighbors(graph.edges), [graph.edges]);
+  const types = useMemo(() => [...new Set(graph.nodes.map((n) => n.type))], [graph.nodes]);
+  const visibleCount = useMemo(
+    () => graph.nodes.filter((n) => !n.props?.is_self).length, [graph.nodes]);
+  const empty = graph.nodes.length === 0;
+
+  // graphData: REUSA objetos de nó (preserva posição) e recria o container só quando o conjunto
+  // muda. Nunca por render de foco/hover.
+  const nodeObjs = useRef<Map<string, any>>(new Map());
+  const data = useMemo(() => {
+    const map = nodeObjs.current;
+    const seen = new Set<string>();
+    const nodes: any[] = [];
+    for (const n of graph.nodes) {
+      if (hidden.has(n.type) || (hideSelf && n.props?.is_self)) continue;
+      seen.add(n.id);
+      let obj = map.get(n.id);
+      if (!obj) {
+        obj = { ...n };
+        if (n.props?.is_self) { obj.fx = 0; obj.fy = 0; }
+        map.set(n.id, obj);
+      } else {
+        obj.label = n.label; obj.type = n.type; obj.props = n.props;
+        obj.first_seen_turn = n.first_seen_turn; obj.url = n.url;
+      }
+      nodes.push(obj);
+    }
+    for (const id of [...map.keys()]) if (!seen.has(id)) map.delete(id);
+    const ids = new Set(nodes.map((n) => n.id));
+    const links = graph.edges
+      .filter((e) => ids.has(e.source) && ids.has(e.target))
+      .map((e) => ({ ...e }));
+    return { nodes, links };
+  }, [graph, hidden, hideSelf]);
+
+  // contexto de estilo (foco/LOD). localMode e replay entram nos próximos blocos.
+  const ctx: StyleCtx = useMemo(() => ({
+    focusNodeId: focusId,
+    focusPinned,
+    focusNeighbors: focusId ? (neighbors.get(focusId) ?? new Set<string>()) : new Set<string>(),
+    localMode: null,
+    replay: null,
+    recentTurn: graph.lastTurn,
+    episode: null,
+  }), [focusId, focusPinned, neighbors, graph.lastTurn]);
+
+  // --- easing de alpha por nó (converge com refresh() enquanto animateUntil ativo) ---
+  const easedAlpha = (id: string, target: number): number => {
+    const cur = alphaRef.current.get(id);
+    if (cur === undefined) { alphaRef.current.set(id, target); return target; }
+    const next = cur + (target - cur) * G.ease;
+    const v = Math.abs(next - target) < 0.01 ? target : next;
+    alphaRef.current.set(id, v);
+    return v;
+  };
+
+  // --- observers e loops ---
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -47,50 +122,82 @@ export function GraphPanel({
     return () => ro.disconnect();
   }, []);
 
-  // Grau de cada nó (para tamanho por grau) e destaque dos nós do último turno.
-  const degree = useMemo(() => {
-    const d: Record<string, number> = {};
-    graph.edges.forEach((e) => { d[e.source] = (d[e.source] || 0) + 1; d[e.target] = (d[e.target] || 0) + 1; });
-    return d;
-  }, [graph.edges]);
+  useEffect(() => {  // loop de refresh só quando há animação de alpha/pulso pendente
+    let raf = 0;
+    const tick = () => {
+      if (Date.now() < animateUntil.current) fgRef.current?.refresh?.();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
-  const radiusOf = (id: string) => Math.max(6, Math.min(14, 6 + (degree[id] || 0) * 1.2));
+  useEffect(() => {  // mudou o foco → anima a transição de alpha por ~350ms
+    animateUntil.current = Date.now() + 350;
+  }, [focusId]);
 
-  // Auto-fit ao crescer o grafo (a menos que o usuário tenha mexido), com teto/piso de escala.
-  // Também dispara o pulso de destaque por 3s.
   useEffect(() => {
-    if (!graph.nodes.length || !fgRef.current) return;
-    manualRef.current = false;
-    highlightUntil.current = Date.now() + 3000;
-    const t = setTimeout(() => { if (!manualRef.current) fitToScreen(); }, 250);
-    // anima o pulso por 3s
-    const iv = setInterval(() => {
-      forceTick((x) => x + 1);
-      fgRef.current?.refresh?.();
-      if (Date.now() > highlightUntil.current) clearInterval(iv);
-    }, 80);
-    return () => { clearTimeout(t); clearInterval(iv); };
-  }, [graph.lastTurn, graph.nodes.length, size.w]);
+    const onFs = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
 
-  // Ajustar à tela: enquadra tudo com folga de 40px. O teto de escala só vale para grafos
-  // minúsculos (≤3 nós), senão deixamos aproximar até o zoomToFit natural (limitado por MAX_ZOOM).
+  useEffect(() => {   // hook só de dev p/ dirigir zoom/foco nas telas de teste (checkpoint A)
+    if (!(import.meta as any).env?.DEV) return;
+    (window as any).__graphDev = {
+      fg: fgRef.current,
+      focus: (id: string) => { setFocusId(id); setFocusPinned(true); animateUntil.current = Date.now() + 400; },
+      hover: (id: string | null) => { setFocusPinned(false); setFocusId(id); animateUntil.current = Date.now() + 400; },
+      fit: () => { manualRef.current = false; fitToScreen(); },
+    };
+  });
+
+  // configura forças + reaquece com pin dos existentes + auto-fit, a cada delta
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || !data.nodes.length || !size.w) return;
+    configureForces(fg, {
+      collideRadius: (n: any) => radiusOf(degree.get(n.id) || 0, !!n.props?.is_self)
+        + labelWidth(shortLabel(n), G.labelBase) / 2 + 4,
+    });
+    reheatWithPins(fg, data.nodes, (id) => nodeObjs.current.get(id)?.first_seen_turn !== graph.lastTurn);
+    manualRef.current = false;
+    animateUntil.current = Date.now() + 3200;   // pulso dos novos ~3s
+    const t = setTimeout(() => { if (!manualRef.current) fitToScreen(); }, 450);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph.lastTurn, size.w, data.nodes.length]);
+
+  // --- enquadramento (inclui os retângulos dos rótulos; 1–3 nós ocupam ~40% da largura) ---
   const fitToScreen = () => {
     const fg = fgRef.current;
-    if (!fg) return;
-    fg.zoomToFit(600, 40);
-    setTimeout(() => {
-      const z = fg.zoom();
-      if (z < MIN_ZOOM) fg.zoom(MIN_ZOOM, 400);
-      if (data.nodes.length <= 3 && z > 2.5) fg.zoom(2.5, 400);   // não estourar 1–3 nós
-    }, 620);
+    if (!fg || !data.nodes.length) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let count = 0;
+    for (const n of data.nodes as any[]) {
+      if (typeof n.x !== "number") continue;
+      if (!resolveNodeState(n, ctx).visible) continue;
+      const r = radiusOf(degree.get(n.id) || 0, !!n.props?.is_self);
+      const halfW = Math.max(r, labelWidth(shortLabel(n), G.labelBase) / 2 + 3);
+      minX = Math.min(minX, n.x - halfW); maxX = Math.max(maxX, n.x + halfW);
+      minY = Math.min(minY, n.y - r); maxY = Math.max(maxY, n.y + r + G.labelBase + 4);
+      count++;
+    }
+    if (!isFinite(minX)) return;
+    const pad = 40;
+    const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+    let scale = Math.min((size.w - pad * 2) / w, (size.h - pad * 2) / h);
+    if (count <= 3) scale = (size.w * 0.4) / w;    // nó + rótulo ~40% da largura
+    scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale));
+    fg.centerAt((minX + maxX) / 2, (minY + maxY) / 2, 600);
+    fg.zoom(scale, 600);
   };
 
   const zoomBy = (factor: number) => {
     const fg = fgRef.current;
     if (!fg) return;
     manualRef.current = true;
-    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fg.zoom() * factor));
-    fg.zoom(z, 250);
+    fg.zoom(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fg.zoom() * factor)), 250);
   };
 
   const toggleFullscreen = () => {
@@ -100,38 +207,137 @@ export function GraphPanel({
     else el.requestFullscreen?.();
   };
 
-  useEffect(() => {
-    const onFs = () => setFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", onFs);
-    return () => document.removeEventListener("fullscreenchange", onFs);
-  }, []);
+  const clearFocus = () => { setFocusId(null); setFocusPinned(false); };
 
-  const types = useMemo(() => [...new Set(graph.nodes.map((n) => n.type))], [graph.nodes]);
-  const visibleCount = useMemo(
-    () => graph.nodes.filter((n) => !n.props?.is_self).length, [graph.nodes]);
-
-  const data = useMemo(() => {
-    const visibleNodes = graph.nodes.filter(
-      (n) => !hidden.has(n.type) && !(hideSelf && n.props?.is_self));
-    const ids = new Set(visibleNodes.map((n) => n.id));
-    return {
-      nodes: visibleNodes.map((n) => {
-        const self = !!n.props?.is_self;
-        return { ...n, ...(self ? { fx: 0, fy: 0 } : {}) };
-      }),
-      links: graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target)).map((e) => ({ ...e })),
-    };
-  }, [graph, hidden, hideSelf]);
-
-  const empty = graph.nodes.length === 0;
-  const toggleType = (t: string) =>
-    setHidden((h) => { const n = new Set(h); n.has(t) ? n.delete(t) : n.add(t); return n; });
-
-  // Teclado: + aproxima, − afasta, 0 ajusta à tela (quando o cursor está sobre o painel).
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.4); }
     else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.4); }
     else if (e.key === "0") { e.preventDefault(); manualRef.current = false; fitToScreen(); }
+    else if (e.key === "Escape") { clearFocus(); setSelected(null); }
+  };
+
+  const toggleType = (t: string) =>
+    setHidden((h) => { const n = new Set(h); n.has(t) ? n.delete(t) : n.add(t); return n; });
+
+  // --- desenho ---
+  const drawNode = (node: any, c: CanvasRenderingContext2D, scale: number) => {
+    const st = resolveNodeState(node, ctx);
+    if (!st.visible) return;
+    const a = easedAlpha(node.id, st.alpha);
+    if (a < 0.03) return;
+    const band = lodBand(scale);
+    const self = !!node.props?.is_self;
+    const deg = degree.get(node.id) || 0;
+    const r = radiusOf(deg, self) / scale;
+    const color = nodeColor(node);
+    c.globalAlpha = a;
+
+    if (st.emphasis === "new" && Date.now() < animateUntil.current) {  // pulso dos novos
+      const pulse = 1 + 0.4 * Math.abs(Math.sin(Date.now() / 250));
+      c.beginPath(); c.arc(node.x, node.y, r * 1.7 * pulse, 0, 2 * Math.PI);
+      c.fillStyle = color + "22"; c.fill();
+    }
+
+    c.beginPath(); c.arc(node.x, node.y, r, 0, 2 * Math.PI);
+    c.fillStyle = color; c.fill();
+
+    if (node.props?.provisional) {
+      c.setLineDash([3 / scale, 2 / scale]); c.lineWidth = 1.5 / scale;
+      c.strokeStyle = color; c.globalAlpha = a * 0.7; c.stroke();
+      c.setLineDash([]); c.globalAlpha = a;
+    }
+    if (self) {
+      c.lineWidth = 2 / scale; c.strokeStyle = "#005bbf"; c.stroke();
+      c.fillStyle = "#fff"; c.font = `${r}px system-ui`;
+      c.textAlign = "center"; c.textBaseline = "middle"; c.fillText("V", node.x, node.y);
+    } else if (showIcon(band)) {
+      const g = glyph(glyphType(node));
+      if (g) { const s = r * 1.3; c.drawImage(g, node.x - s / 2, node.y - s / 2, s, s); }
+    }
+
+    if (showNodeLabel(band, node, deg, ctx)) {
+      const label = shortLabel(node);
+      const fs = G.labelBase / scale;
+      c.font = `${fs}px system-ui`;
+      const w = c.measureText(label).width;
+      const ly = node.y + r + fs * 0.9;
+      c.fillStyle = `rgba(255,255,255,${0.82 * a})`;
+      c.fillRect(node.x - w / 2 - 3 / scale, ly - fs / 2 - 1 / scale, w + 6 / scale, fs + 2 / scale);
+      c.fillStyle = self ? "#94a3b8" : "#1a1f24";
+      c.textAlign = "center"; c.textBaseline = "middle";
+      c.fillText(label, node.x, ly);
+    }
+
+    const staged = Number(node.props?.staged_participants || 0);
+    if (node.type === "calendar_event" && staged > 0 && band !== "far") {
+      const bt = `+${staged}`, bfs = 9 / scale;
+      c.font = `${bfs}px system-ui`;
+      const bw = c.measureText(bt).width + 6 / scale;
+      const bx = node.x + r, by = node.y - r;
+      c.fillStyle = "#64748b";
+      c.beginPath(); c.roundRect(bx - bw / 2, by - bfs, bw, bfs + 3 / scale, 3 / scale); c.fill();
+      c.fillStyle = "#fff"; c.fillText(bt, bx, by - bfs / 2 + 1 / scale);
+    }
+    c.globalAlpha = 1;
+  };
+
+  // retângulo do rótulo de um nó (coords do grafo) — para evitar colisão com rótulos de aresta
+  const nodeLabelRect = (nd: any, c: CanvasRenderingContext2D, scale: number) => {
+    const deg = degree.get(nd.id) || 0;
+    const r = radiusOf(deg, !!nd.props?.is_self) / scale;
+    const nfs = G.labelBase / scale;
+    c.font = `${nfs}px system-ui`;
+    const nw = c.measureText(shortLabel(nd)).width;
+    const ly = nd.y + r + nfs * 0.9;
+    return { x0: nd.x - nw / 2 - 3 / scale, y0: ly - nfs / 2 - 1 / scale,
+             x1: nd.x + nw / 2 + 3 / scale, y1: ly + nfs / 2 + 1 / scale };
+  };
+
+  const drawLink = (link: any, c: CanvasRenderingContext2D, scale: number) => {
+    const s = link.source, t = link.target;
+    if (typeof s !== "object" || typeof t !== "object") return;
+    const ss = resolveNodeState(s, ctx), ts = resolveNodeState(t, ctx);
+    const sa = { ...ss, alpha: easedAlpha(s.id, ss.alpha) };
+    const ta = { ...ts, alpha: easedAlpha(t.id, ts.alpha) };
+    const ls = resolveLinkState(sa, ta, link.type);
+    if (!ls.visible || ls.alpha < 0.02) return;
+
+    const dash = edgeDash(link.type, scale);
+    c.beginPath(); c.moveTo(s.x, s.y); c.lineTo(t.x, t.y);
+    c.strokeStyle = `rgba(${G.edgeColor}, ${ls.alpha})`;
+    c.lineWidth = (ls.focused ? 1.5 : 1) / scale;
+    if (dash) c.setLineDash(dash); else c.setLineDash([]);
+    c.stroke(); c.setLineDash([]);
+
+    const band = lodBand(scale);
+    if (!showEdgeLabel(band, ls, ctx)) return;
+    const txt = EDGE_LABELS[link.type] || link.type;
+    const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
+    const fs = G.edgeLabelBase / scale;
+    c.font = `${fs}px system-ui`;
+    const w = c.measureText(txt).width;
+    const er = { x0: mx - w / 2 - 2 / scale, y0: my - fs / 2 - 1 / scale,
+                 x1: mx + w / 2 + 2 / scale, y1: my + fs / 2 + 1 / scale };
+    for (const nd of data.nodes as any[]) {   // oculta rótulo de aresta que colide com rótulo de nó
+      if (typeof nd.x !== "number" || !resolveNodeState(nd, ctx).visible) continue;
+      const b = nodeLabelRect(nd, c, scale);
+      if (er.x0 < b.x1 && er.x1 > b.x0 && er.y0 < b.y1 && er.y1 > b.y0) return;
+    }
+    c.font = `${fs}px system-ui`;
+    c.fillStyle = `rgba(255,255,255,0.85)`;
+    c.fillRect(er.x0, er.y0, w + 4 / scale, fs + 2 / scale);
+    c.fillStyle = "#64748b"; c.textAlign = "center"; c.textBaseline = "middle";
+    c.fillText(txt, mx, my);
+  };
+
+  const paintPointer = (node: any, color: string, c: CanvasRenderingContext2D, scale: number) => {
+    if (!resolveNodeState(node, ctx).visible) return;
+    const self = !!node.props?.is_self;
+    const r = radiusOf(degree.get(node.id) || 0, self) / scale;
+    c.fillStyle = color;
+    c.beginPath(); c.arc(node.x, node.y, r + 2 / scale, 0, 2 * Math.PI); c.fill();
+    const b = nodeLabelRect(node, c, scale);   // hit-area cobre o rótulo também
+    c.fillRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
   };
 
   return (
@@ -146,8 +352,7 @@ export function GraphPanel({
               <button
                 onClick={async () => {
                   if (staging) { setStaging(null); return; }
-                  try { setStaging(await fetchDebugGraph(conversationId)); }
-                  catch { /* debug off */ }
+                  try { setStaging(await fetchDebugGraph(conversationId)); } catch { /* off */ }
                 }}
                 className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 hover:bg-amber-100">
                 Staging
@@ -179,121 +384,31 @@ export function GraphPanel({
                 backgroundColor="#ffffff"
                 minZoom={MIN_ZOOM}
                 maxZoom={MAX_ZOOM}
-                cooldownTicks={40}
+                cooldownTicks={60}
                 d3AlphaDecay={0.08}
-                onEngineStop={() => { if (!manualRef.current) fitToScreen(); }}
+                d3VelocityDecay={0.3}
+                enableNodeDrag
                 onZoom={() => { manualRef.current = true; }}
-                onNodeClick={(n: any) => setSelected(graph.nodes.find((x) => x.id === n.id) ?? null)}
-                onBackgroundClick={() => setSelected(null)}
+                onEngineStop={() => { if (!manualRef.current) fitToScreen(); }}
+                onNodeHover={(n: any) => { if (!focusPinned) setFocusId(n?.id ?? null); }}
+                onNodeClick={(n: any) => {
+                  setFocusId(n.id); setFocusPinned(true);
+                  setSelected(graph.nodes.find((x) => x.id === n.id) ?? null);
+                }}
+                onNodeDragEnd={(n: any) => pinAfterDrag(fgRef.current, n)}
+                onBackgroundClick={() => { clearFocus(); setSelected(null); }}
                 nodeLabel={(n: any) => {
                   const full = n.props?.title || n.label || "";
                   return n.props?.provisional ? `${full} (inferido a partir do documento)` : full;
                 }}
-                linkColor={(l: any) => (l.type === "related_to" ? "#94a3b8" : "#cbd5e1")}
-                linkLineDash={(l: any) => (l.type === "related_to" ? [4, 3] : null)}
-                linkWidth={(l: any) => 1 + (l.weight || 0.5) * 1.5}
-                linkDirectionalArrowLength={4}
-                linkDirectionalArrowRelPos={1}
-                onLinkHover={(l: any) => setHoverEdge(l ? (l.rationale ? `${EDGE_LABELS[l.type] || l.type}: ${l.rationale}` : (EDGE_LABELS[l.type] || l.type)) : null)}
-                linkCanvasObjectMode={() => "after"}
-                linkCanvasObject={(l: any, ctx, scale) => {
-                  if (visibleCount > 12) return; // rótulos de aresta só até 12 nós
-                  if (typeof l.source !== "object" || typeof l.target !== "object") return;
-                  const txt = EDGE_LABELS[l.type] || l.type;
-                  const mx = (l.source.x + l.target.x) / 2, my = (l.source.y + l.target.y) / 2;
-                  const fs = 9 / scale;
-                  ctx.font = `${fs}px system-ui`;
-                  const w = ctx.measureText(txt).width;
-
-                  // B7: oculta o rótulo da aresta se colidir com o rótulo de qualquer nó.
-                  const er = { x0: mx - w / 2 - 2 / scale, y0: my - fs / 2 - 1 / scale,
-                               x1: mx + w / 2 + 2 / scale, y1: my + fs / 2 + 1 / scale };
-                  const nfs = 11 / scale;
-                  for (const nd of data.nodes as any[]) {
-                    if (typeof nd.x !== "number" || typeof nd.y !== "number") continue;
-                    ctx.font = `${nfs}px system-ui`;
-                    const nw = ctx.measureText(shortLabel(nd)).width;
-                    const nr = radiusOf(nd.id) / scale;
-                    const ly = nd.y + nr + nfs * 0.9;
-                    const box = { x0: nd.x - nw / 2 - 3 / scale, y0: ly - nfs / 2 - 1 / scale,
-                                  x1: nd.x + nw / 2 + 3 / scale, y1: ly + nfs / 2 + 1 / scale };
-                    if (er.x0 < box.x1 && er.x1 > box.x0 && er.y0 < box.y1 && er.y1 > box.y0) return;
-                  }
-                  ctx.font = `${fs}px system-ui`; // restaura fonte da aresta
-
-                  ctx.fillStyle = "rgba(255,255,255,0.85)";
-                  ctx.fillRect(mx - w / 2 - 2 / scale, my - fs / 2 - 1 / scale, w + 4 / scale, fs + 2 / scale);
-                  ctx.fillStyle = "#64748b";
-                  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-                  ctx.fillText(txt, mx, my);
-                }}
-                nodeCanvasObject={(node: any, ctx, scale) => {
-                  const self = !!node.props?.is_self;
-                  const provisional = !!node.props?.provisional;
-                  const color = self ? SELF_COLOR : (nodeColors[node.type] ?? "#64748b");
-                  const r = radiusOf(node.id) / scale;
-
-                  // pulso de destaque para nós novos OU recém-promovidos
-                  const isNew = node.first_seen_turn === graph.lastTurn || graph.promoted.includes(node.id);
-                  if (isNew && Date.now() < highlightUntil.current) {
-                    const pulse = 1 + 0.4 * Math.abs(Math.sin(Date.now() / 250));
-                    ctx.beginPath(); ctx.arc(node.x, node.y, r * 1.6 * pulse, 0, 2 * Math.PI);
-                    ctx.fillStyle = color + "22"; ctx.fill();
-                  }
-
-                  ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-                  ctx.fillStyle = color; ctx.fill();
-                  if (provisional) { // provisório: contorno tracejado, mais claro
-                    ctx.globalAlpha = 0.55;
-                    ctx.setLineDash([3 / scale, 2 / scale]); ctx.lineWidth = 1.5 / scale;
-                    ctx.strokeStyle = color; ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-                  }
-                  if (self) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = SELF_COLOR; ctx.stroke(); }
-
-                  // ícone (glyph branco) dentro do nó; "Você" mostra iniciais
-                  if (self) {
-                    ctx.fillStyle = "#fff"; ctx.font = `${r}px system-ui`;
-                    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("V", node.x, node.y);
-                  } else {
-                    const g = glyph(glyphType(node));
-                    if (g) { const s = r * 1.3; ctx.globalAlpha = provisional ? 0.7 : 1;
-                      ctx.drawImage(g, node.x - s / 2, node.y - s / 2, s, s); ctx.globalAlpha = 1; }
-                  }
-
-                  // rótulo com halo (pílula), abaixo do nó
-                  const label = shortLabel(node);
-                  const fs = 11 / scale;
-                  ctx.font = `${fs}px system-ui`;
-                  const w = ctx.measureText(label).width;
-                  const ly = node.y + r + fs * 0.9;
-                  ctx.fillStyle = "rgba(255,255,255,0.82)";
-                  ctx.fillRect(node.x - w / 2 - 3 / scale, ly - fs / 2 - 1 / scale, w + 6 / scale, fs + 2 / scale);
-                  ctx.fillStyle = self ? "#94a3b8" : "#1a1f24";
-                  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-                  ctx.fillText(label, node.x, ly);
-
-                  // badge "+N participantes" para eventos com participantes colapsados
-                  const staged = Number(node.props?.staged_participants || 0);
-                  if (node.type === "calendar_event" && staged > 0) {
-                    const bt = `+${staged}`; const bfs = 9 / scale;
-                    ctx.font = `${bfs}px system-ui`; const bw = ctx.measureText(bt).width + 6 / scale;
-                    const bx = node.x + r, by = node.y - r;
-                    ctx.fillStyle = "#64748b";
-                    ctx.beginPath(); ctx.roundRect(bx - bw / 2, by - bfs, bw, bfs + 3 / scale, 3 / scale); ctx.fill();
-                    ctx.fillStyle = "#fff"; ctx.fillText(bt, bx, by - bfs / 2 + 1 / scale);
-                  }
-                }}
-                nodePointerAreaPaint={(node: any, color, ctx, scale) => {
-                  ctx.fillStyle = color; ctx.beginPath();
-                  ctx.arc(node.x, node.y, radiusOf(node.id) / scale + 2 / scale, 0, 2 * Math.PI); ctx.fill();
-                }}
+                nodeCanvasObjectMode={() => "replace"}
+                nodeCanvasObject={drawNode}
+                nodePointerAreaPaint={paintPointer}
+                linkCanvasObjectMode={() => "replace"}
+                linkCanvasObject={drawLink}
               />
-              {hoverEdge && (
-                <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-md bg-textc/90 px-2 py-1 text-xs text-white">
-                  {hoverEdge}
-                </div>
-              )}
-              {/* Controles de zoom/enquadramento (canto inferior direito). */}
+
+              {/* Controles de zoom/enquadramento */}
               <div className="absolute bottom-3 right-3 flex flex-col items-stretch gap-1">
                 <div className="flex overflow-hidden rounded-md border border-borderc bg-surface/95 shadow-sm">
                   <button onClick={() => zoomBy(1.4)} title="Aproximar (+)"
@@ -311,6 +426,7 @@ export function GraphPanel({
                   {fullscreen ? "Sair" : "Expandir"}
                 </button>
               </div>
+
               {staging && (
                 <div className="absolute left-3 top-3 max-h-[80%] w-72 overflow-auto rounded-lg border border-borderc bg-surface/97 p-2 text-xs shadow-lg">
                   <div className="mb-1 flex items-center justify-between">
@@ -333,11 +449,12 @@ export function GraphPanel({
                   ))}
                 </div>
               )}
+
               {selected && (
                 <NodeDetail node={selected} graph={graph}
                   onAskAbout={(n) => { onAskAbout(n); setSelected(null); }}
                   onPromote={onPromote}
-                  onClose={() => setSelected(null)} />
+                  onClose={() => { setSelected(null); clearFocus(); }} />
               )}
             </>
           )
@@ -373,7 +490,7 @@ function GlyphChip({ type }: { type: string }) {
   useEffect(() => {
     const g = glyph(type);
     const el = ref.current;
-    if (g && el) { const ctx = el.getContext("2d"); ctx?.clearRect(0, 0, 14, 14); ctx?.drawImage(g, 0, 0, 14, 14); }
+    if (g && el) { const c = el.getContext("2d"); c?.clearRect(0, 0, 14, 14); c?.drawImage(g, 0, 0, 14, 14); }
   }, [type]);
   return <canvas ref={ref} width={14} height={14} className="h-2.5 w-2.5" />;
 }

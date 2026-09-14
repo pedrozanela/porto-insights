@@ -26,6 +26,23 @@ export const nodeColors: Record<string, string> = {
   data_asset: "#556170",
 };
 
+// Parâmetros de interação/aparência do grafo (fonte única; consumidos por graphStyle/graphPhysics).
+export const graph = {
+  lod: { far: 0.6, near: 1.4 },              // limiares de zoom (globalScale)
+  alpha: {
+    structural: 0.2,                          // arestas estruturais
+    semantic: 0.3,                            // arestas related_to
+    dim: 0.15,                                // nós fora do foco
+    episodeDim: 0.3,                          // reservado p/ episódios
+    focusEdge: 0.9,                           // aresta com as duas pontas em foco
+  },
+  radius: { min: 6, max: 16, perDegree: 1.5, self: 8 },
+  edgeColor: "100, 116, 139",                 // slate-500 em RGB (usado com alpha via rgba)
+  labelBase: 11,                              // px de tela do rótulo de nó (÷ globalScale)
+  edgeLabelBase: 9,
+  ease: 0.18,                                 // suavização de alpha por frame (~150ms)
+} as const;
+
 export const nodeLabels: Record<string, string> = {
   person: "Pessoa",
   calendar_event: "Evento",
