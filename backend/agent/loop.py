@@ -21,7 +21,8 @@ from ..genie.client import run_genie_ask
 from ..genie.composite import GENIE_TOOL, card_payload, compact_result_for_llm
 from ..graph.extractors.genie import extract_genie
 from ..graph.linker import (
-    NODE_CREATING_TOOLS, deterministic_links, extract_from_tool, reconcile_provisionals, semantic_links,
+    NODE_CREATING_TOOLS, deterministic_links, extract_from_tool, reconcile_provisionals,
+    reconcile_recurring, semantic_links,
 )
 from ..graph.promotion import bare_visible_events, enforce_no_orphans, promote, visible_delta
 from ..graph.schema import GraphNode, delta_payload, is_visible
@@ -433,9 +434,11 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
             # Item 4: resolve título/mimeType de anexos que vieram só como stub (fileUrl/fileId).
             await _enrich_drive_stubs(user, state, turn, registry)
 
-            # Reconciliação ANTES da promoção: funde provisório→real (reaponta notes_of) para a
-            # promoção ver o evento real já unificado.
+            # Reconciliação ANTES da promoção: funde provisório→real (reaponta notes_of) e
+            # instâncias recorrentes num único nó canônico (evento semanal = 1 nó, não N).
             _, removed = reconcile_provisionals(state, turn)
+            _, removed_rec = reconcile_recurring(state, final_answer)
+            removed += removed_rec
             # Linker semântico (vê todos os nós, inclusive staging) → related_to, mentions e
             # relevant_node_ids. Determinístico ANTES da promoção: cria links_to/same_time_window
             # para o fechamento estrutural e o invariante sem-órfãos verem todas as arestas.

@@ -156,6 +156,22 @@ def test_desambiguacao_recorrente_por_data():
     assert is_visible(st.nodes["calendar:i16"]) and not is_visible(st.nodes["calendar:i23"])
 
 
+def test_recorrente_uma_instancia_mesmo_em_duas_passadas():
+    # relevant_ids marca as 3 instâncias, mas só 1 aparece — e a 2ª passada (após enriquecimento)
+    # NÃO promove outra instância do mesmo título recorrente.
+    st = GraphState()
+    for i, d in enumerate(["2026-09-16", "2026-09-23", "2026-09-30"]):
+        st.add_node(staged(f"calendar:w{i}", "calendar_event", "Weekly Sync",
+                           summary="Weekly Sync", start=d + "T11:00:00-03:00"))
+    rel = {"calendar:w0", "calendar:w1", "calendar:w2"}
+    promote(st, answer_text="Sobre o Weekly Sync recorrente.", relevant_ids=rel, asked_text="")
+    vis1 = [n for n in st.nodes.values() if n.type == "calendar_event" and is_visible(n)]
+    assert len(vis1) == 1
+    promote(st, answer_text="Sobre o Weekly Sync recorrente.", relevant_ids=rel, asked_text="")  # 2ª passada
+    vis2 = [n for n in st.nodes.values() if n.type == "calendar_event" and is_visible(n)]
+    assert len(vis2) == 1   # continua 1, não multiplica
+
+
 def test_recorrente_sem_data_promove_mais_proximo():
     near = (date.today() + timedelta(days=2)).isoformat() + "T11:00:00-03:00"
     far = (date.today() + timedelta(days=200)).isoformat() + "T11:00:00-03:00"

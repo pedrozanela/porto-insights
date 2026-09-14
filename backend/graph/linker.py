@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
@@ -157,6 +158,55 @@ def reconcile_provisionals(state: GraphState, turn: int) -> tuple[list[GraphEdge
                 if rem:
                     removed.append(rem)
                 break
+    return added, removed
+
+
+_ANS_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/\d{2,4})?\b")
+
+
+def _daymonth(start: str) -> tuple[int, int] | None:
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(start or "")[:10])
+    return (int(m.group(3)), int(m.group(2))) if m else None
+
+
+def _dist_today(start: str) -> int:
+    try:
+        return abs((datetime.fromisoformat(str(start)[:10]).date() - datetime.now().date()).days)
+    except Exception:  # noqa: BLE001
+        return 10**6
+
+
+def reconcile_recurring(state: GraphState, answer_text: str = "") -> tuple[list[GraphEdge], list[str]]:
+    """Funde instâncias da MESMA série recorrente num único nó canônico, reapontando
+    participantes/anexos. Chave: recurringEventId; senão (título normalizado, HH:MM) com 2+
+    instâncias. Canônica: a instância cuja data foi citada na resposta; senão a mais próxima de
+    hoje. Assim um evento semanal vira UM nó (não N), e a promoção/colapso operam sobre ele."""
+    prefer = {(int(d), int(mo)) for d, mo in _ANS_DATE_RE.findall(answer_text or "")
+              if 1 <= int(d) <= 31 and 1 <= int(mo) <= 12}
+    groups: dict[tuple, list[GraphNode]] = {}
+    for n in state.nodes.values():
+        if n.type != "calendar_event" or n.props.get("provisional"):
+            continue
+        rid = n.props.get("recurring_id")
+        start = str(n.props.get("start") or "")
+        key = ("rid", rid) if rid else ("title", normalize_title(n.props.get("summary") or n.label), start[11:16])
+        groups.setdefault(key, []).append(n)
+
+    added: list[GraphEdge] = []
+    removed: list[str] = []
+    for evs in groups.values():
+        if len(evs) < 2:
+            continue
+        preferred = [e for e in evs if _daymonth(e.props.get("start")) in prefer]
+        pool = preferred or evs
+        canonical = min(pool, key=lambda e: _dist_today(e.props.get("start")))
+        for e in evs:
+            if e.id == canonical.id:
+                continue
+            edges, rem = state.merge_node(e.id, canonical.id)
+            added += edges
+            if rem:
+                removed.append(rem)
     return added, removed
 
 

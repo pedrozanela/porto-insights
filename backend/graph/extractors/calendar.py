@@ -47,7 +47,8 @@ def _add_event(state: GraphState, added_n, added_e, ev: dict[str, Any], turn: in
         id=cid, type="calendar_event", label=summary[:60], source="calendar",
         url=ev.get("htmlLink"), first_seen_turn=turn,
         props={"summary": summary, "start": _start(ev), "location": ev.get("location"),
-               "description": desc, "_text": f"{summary} {desc}"}))
+               "description": desc, "_text": f"{summary} {desc}",
+               "recurring_id": ev.get("recurringEventId")}))
     if node:
         added_n.append(node)
 

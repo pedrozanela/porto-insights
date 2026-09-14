@@ -231,15 +231,16 @@ def _seed(state: GraphState, answer_text: str, answer_norm: str, answer_drive_id
         if e.type == "notes_of" and e.source in state.nodes and is_visible(state.nodes[e.source])
     }
     cited = _cited_daymonths(answer_text)
-    events = [n for n in state.nodes.values() if n.type == "calendar_event" and not is_visible(n)]
-    by_title: dict[str, list] = {}
-    for ev in events:
+    by_title: dict[str, list] = {}   # agrupa TODAS as instâncias (visíveis + staging) por título
+    for ev in [n for n in state.nodes.values() if n.type == "calendar_event"]:
         by_title.setdefault(normalize_title(ev.props.get("summary") or ev.label), []).append(ev)
 
     for title, evs in by_title.items():
+        if any(is_visible(e) for e in evs):
+            continue  # recorrente já representada por uma instância → não multiplica (nem em 2ª passada)
         title_cited = len(title) > 4 and title in answer_norm
-        cands = [e for e in evs if not is_visible(e)
-                 and (title_cited or e.id in relevant_ids or e.id in notes_events)]
+        cands = [e for e in evs
+                 if title_cited or e.id in relevant_ids or e.id in notes_events]
         if not cands:
             continue
 

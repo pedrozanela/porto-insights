@@ -4,7 +4,9 @@ from __future__ import annotations
 from backend.graph.extractors.calendar import extract_calendar
 from backend.graph.extractors.drive import extract_drive
 from backend.graph.extractors.gmail import extract_gmail
-from backend.graph.linker import build_candidates, deterministic_links, semantic_links
+from backend.graph.linker import (
+    build_candidates, deterministic_links, reconcile_recurring, semantic_links,
+)
 from backend.graph.schema import GraphEdge, GraphNode, GraphState
 from backend.mcp.allowlist import allowed, is_write_tool
 
@@ -114,6 +116,33 @@ async def test_linker_json_valido_promove_relevantes():
     assert relevant == {"calendar:e"}
     assert any(e.type == "related_to" for e in edges)
     assert st.linker_health["failed"] is False and st.linker_health["relevant"] == 1
+
+
+def test_reconcile_recurring_funde_instancias():
+    # 3 instâncias da mesma série recorrente → 1 nó canônico; arestas reapontadas.
+    st = GraphState()
+    for i, d in enumerate(["2026-09-16", "2026-09-23", "2026-09-30"]):
+        st.add_node(GraphNode(f"cal:{i}", "calendar_event", "BR SA Tech Weekly Meeting", "calendar", 1,
+                              props={"summary": "BR SA Tech Weekly Meeting",
+                                     "start": d + "T11:00:00-03:00", "recurring_id": "master1"}))
+    st.add_node(GraphNode("p:fer", "person", "Fernando", "gmail", 1, props={}))
+    st.add_edge(GraphEdge(id="e1", source="cal:1", target="p:fer", type="attendee", first_seen_turn=1))
+    _, removed = reconcile_recurring(st, answer_text="")
+    evs = [n for n in st.nodes.values() if n.type == "calendar_event"]
+    assert len(evs) == 1 and len(removed) == 2          # 3 → 1
+    canon = evs[0].id
+    assert any(e.source == canon and e.target == "p:fer" and e.type == "attendee"
+               for e in st.edges.values())              # aresta de Fernando reapontada
+
+
+def test_reconcile_recurring_prefere_data_citada():
+    st = GraphState()
+    for i, d in enumerate(["2026-09-16", "2026-09-23", "2026-09-30"]):
+        st.add_node(GraphNode(f"cal:{i}", "calendar_event", "Weekly", "calendar", 1,
+                              props={"summary": "Weekly", "start": d + "T11:00:00-03:00", "recurring_id": "m"}))
+    reconcile_recurring(st, answer_text="a reunião é dia 30/09")
+    evs = [n for n in st.nodes.values() if n.type == "calendar_event"]
+    assert len(evs) == 1 and str(evs[0].props["start"]).startswith("2026-09-30")  # data citada vence
 
 
 def test_precedencia_deterministica_pair_linked():
