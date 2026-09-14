@@ -14,6 +14,8 @@ import logging
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
+from pydantic import BaseModel, ValidationError
+
 from .extractors.calendar import extract_calendar
 from .extractors.common import drive_id, extract_drive_ids, normalize_title, provisional_person_id
 from .extractors.drive import extract_drive
@@ -158,26 +160,44 @@ def reconcile_provisionals(state: GraphState, turn: int) -> tuple[list[GraphEdge
 
 
 SEMANTIC_PROMPT = """\
-Você conecta um grafo de conhecimento. Recebe NÓS existentes (id, tipo, rótulo) e o TEXTO da
-resposta dada ao usuário neste turno. Faça duas coisas:
+Você conecta um grafo de conhecimento. Recebe CANDIDATOS (id, tipo, rótulo curto, data) e o TEXTO
+da resposta dada ao usuário neste turno. Faça três coisas:
 
-1) related_to: arestas entre nós existentes que tratam do MESMO assunto e que ainda não
-   estariam obviamente ligados (ex.: uma reunião e uma resposta de dados sobre o tema dela).
-   Cada uma: {"source": id, "target": id, "confidence": 0..1, "rationale": "motivo curto pt-BR"}.
+1) edges (related_to): pares de nós existentes que tratam do MESMO assunto e ainda não estariam
+   obviamente ligados (ex.: uma reunião e uma resposta de dados sobre o tema dela).
+   Cada um: {"source": id, "target": id, "confidence": 0..1, "rationale": "motivo curto pt-BR"}.
 
-2) mentions: NOMES DE PESSOAS citados no texto que NÃO estão entre os nós (ex.: alguém mencionado
-   no resumo de um documento). Cada uma: {"name": "Nome Sobrenome", "in_node": id_do_no_de_conteudo,
+2) mentions: NOMES DE PESSOAS citados no texto que NÃO estão entre os candidatos (ex.: alguém
+   citado no resumo de um documento). Cada um: {"name": "Nome Sobrenome", "in_node": id_do_conteudo,
    "confidence": 0..1}. APENAS pessoas reais (não empresas, produtos, times ou lugares).
 
-3) relevant_node_ids: ids dos nós que são DIRETAMENTE relevantes para a resposta deste turno
-   (o que a pergunta pediu). Ignore nós que apareceram só como ruído de busca.
+3) relevant_node_ids: ids dos candidatos DIRETAMENTE relevantes para a resposta deste turno.
+   Ignore o que apareceu só como ruído de busca.
 
-Regras: use SOMENTE ids fornecidos em `source`/`target`/`in_node`/`relevant_node_ids`; não invente
-ids. Prefira poucas propostas de alta confiança. Responda APENAS um JSON:
-{"edges": [...], "mentions": [...], "relevant_node_ids": [...]}.
+Use SOMENTE ids fornecidos; não invente ids. Prefira poucas propostas de alta confiança.
+Responda APENAS um objeto JSON: {"edges": [...], "mentions": [...], "relevant_node_ids": [...]}.
 
-NÓS:
+CANDIDATOS (JSON):
 """
+
+
+class _LinkerEdge(BaseModel):
+    source: str
+    target: str
+    confidence: float = 0.0
+    rationale: str = ""
+
+
+class _LinkerMention(BaseModel):
+    name: str
+    in_node: str
+    confidence: float = 0.0
+
+
+class _LinkerOut(BaseModel):
+    edges: list[_LinkerEdge] = []
+    mentions: list[_LinkerMention] = []
+    relevant_node_ids: list[str] = []
 
 
 def _find_person_by_name(state: GraphState, name: str) -> GraphNode | None:
@@ -188,53 +208,99 @@ def _find_person_by_name(state: GraphState, name: str) -> GraphNode | None:
     return None
 
 
+def _node_date(n: GraphNode) -> str:
+    if n.type == "calendar_event":
+        return str(n.props.get("start") or "")[:10]
+    if n.type == "email":
+        return str(n.props.get("date") or "")[:16]
+    return ""
+
+
+def build_candidates(state: GraphState, turn: int, cap: int = 80) -> tuple[list[dict], int]:
+    """Lista COMPACTA de candidatos p/ o linker (nunca os nós completos). Prioridade: nós do
+    turno atual, depois os de maior grau (o "episódio" é a conversa toda). Devolve (lista, total)."""
+    nodes = list(state.nodes.values())
+    deg: dict[str, int] = {}
+    for e in state.edges.values():
+        deg[e.source] = deg.get(e.source, 0) + 1
+        deg[e.target] = deg.get(e.target, 0) + 1
+    nodes.sort(key=lambda n: (1 if n.first_seen_turn == turn else 0, deg.get(n.id, 0)), reverse=True)
+    cands = [{"id": n.id, "tipo": n.type, "rotulo": n.label[:50], "data": _node_date(n)}
+             for n in nodes[:cap]]
+    return cands, len(nodes)
+
+
+async def _call_linker(client, model: str, prompt: str) -> tuple[dict | None, str, str | None]:
+    """Chama o modelo pedindo JSON. Tenta modo JSON estruturado; se o endpoint recusar, refaz sem.
+    Retorna (data|None, mode, error)."""
+    for mode, kwargs in (("json_object", {"response_format": {"type": "json_object"}}), ("plain", {})):
+        try:
+            resp = await client.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": prompt}], max_tokens=1500, **kwargs)
+            content = resp.choices[0].message.content or ""
+            frag = content[content.find("{"): content.rfind("}") + 1]
+            return json.loads(frag), mode, None
+        except TypeError:
+            continue  # endpoint não aceita response_format → tenta plain
+        except Exception as e:  # noqa: BLE001 — JSON inválido/truncado ou erro de rede
+            if mode == "plain":
+                return None, mode, f"{type(e).__name__}: {str(e)[:120]}"
+            continue
+    return None, "plain", "sem saída"
+
+
 async def semantic_links(
     client, model: str, state: GraphState, turn: int, min_confidence: float,
     *, answer_text: str = "", mention_min_conf: float = 0.7,
 ) -> tuple[list[GraphNode], list[GraphEdge], set[str]]:
     """LLM propõe related_to (entre nós), mentions (pessoas citadas) e relevant_node_ids.
-    Retorna (nós novos, arestas novas, ids relevantes p/ promoção)."""
+    Falha de JSON NÃO zera silenciosamente: registra state.linker_health e o turno segue só com
+    as regras determinísticas (título, id canônico, fechamento). Retorna (nós, arestas, relevant)."""
     nodes = list(state.nodes.values())
     if len(nodes) < 2 and not answer_text:
         return [], [], set()
-    # Cap na listagem: com uma semana de agenda o staging tem dezenas de nós e a saída JSON do
-    # modelo estourava o max_tokens (truncava → JSON inválido → relevant_ids vazio). Prioriza
-    # visíveis e os mais recentes; limita o total para caber na resposta.
-    nodes_sorted = sorted(nodes, key=lambda n: (is_visible(n), n.first_seen_turn), reverse=True)
-    listing_nodes = nodes_sorted[:80]
-    listing = "\n".join(f'- {{"id": "{n.id}", "tipo": "{n.type}", "rotulo": "{n.label[:50]}"}}' for n in listing_nodes)
-    prompt = SEMANTIC_PROMPT + listing + f"\n\nTEXTO DA RESPOSTA:\n{answer_text[:2000]}"
+    cands, total = build_candidates(state, turn)
+    prompt = SEMANTIC_PROMPT + json.dumps(cands, ensure_ascii=False) + f"\n\nTEXTO DA RESPOSTA:\n{answer_text[:2000]}"
+    raw, mode, error = await _call_linker(client, model, prompt)
+
+    health = {"input_size": total, "listed": len(cands), "mode": mode,
+              "parsed": raw is not None, "error": error, "relevant": 0, "failed": raw is None}
+    if raw is None:
+        logger.warning("linker_failed (%s): input=%d listed=%d — turno só determinístico",
+                       error, total, len(cands))
+        state.linker_health = health  # type: ignore[attr-defined]
+        return [], [], set()
     try:
-        resp = await client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": prompt}], max_tokens=1500)
-        content = resp.choices[0].message.content or "{}"
-        content = content[content.find("{"): content.rfind("}") + 1] or "{}"
-        data = json.loads(content)
-    except Exception as e:  # noqa: BLE001
-        logger.info("semantic linker falhou/sem saída: %s", str(e)[:100])
+        data = _LinkerOut.model_validate(raw)
+    except ValidationError as ve:
+        health.update(parsed=False, failed=True, error=f"schema: {str(ve)[:120]}")
+        logger.warning("linker_failed (schema): %s", str(ve)[:120])
+        state.linker_health = health  # type: ignore[attr-defined]
         return [], [], set()
 
     added_nodes: list[GraphNode] = []
     added_edges: list[GraphEdge] = []
-    relevant_ids: set[str] = {i for i in (data.get("relevant_node_ids") or []) if i in state.nodes}
+    relevant_ids: set[str] = {i for i in data.relevant_node_ids if i in state.nodes}
+    health["relevant"] = len(relevant_ids)
+    state.linker_health = health  # type: ignore[attr-defined]
 
-    for p in data.get("edges", []) or []:
-        src, tgt = p.get("source"), p.get("target")
-        conf = float(p.get("confidence", 0) or 0)
+    for p in data.edges:
+        src, tgt = p.source, p.target
+        conf = float(p.confidence or 0)
         if src not in state.nodes or tgt not in state.nodes or src == tgt or conf < min_confidence:
             continue
         if pair_linked(state, src, tgt):  # B2: já conectados deterministicamente → não propor related_to
             continue
         e = state.add_edge(GraphEdge(
             id=GraphState.edge_id(src, "related_to", tgt), source=src, target=tgt, type="related_to",
-            first_seen_turn=turn, weight=conf, confidence=conf, rationale=(p.get("rationale") or "")[:200]))
+            first_seen_turn=turn, weight=conf, confidence=conf, rationale=(p.rationale or "")[:200]))
         if e:
             added_edges.append(e)
 
-    for m in data.get("mentions", []) or []:
-        name = (m.get("name") or "").strip()
-        in_node = m.get("in_node")
-        conf = float(m.get("confidence", 0) or 0)
+    for m in data.mentions:
+        name = (m.name or "").strip()
+        in_node = m.in_node
+        conf = float(m.confidence or 0)
         if not name or conf < mention_min_conf or in_node not in state.nodes:
             continue
         existing = _find_person_by_name(state, name)  # se já há pessoa (real/provisória), reusa

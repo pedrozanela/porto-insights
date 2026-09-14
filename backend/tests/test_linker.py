@@ -4,9 +4,25 @@ from __future__ import annotations
 from backend.graph.extractors.calendar import extract_calendar
 from backend.graph.extractors.drive import extract_drive
 from backend.graph.extractors.gmail import extract_gmail
-from backend.graph.linker import deterministic_links
+from backend.graph.linker import build_candidates, deterministic_links, semantic_links
 from backend.graph.schema import GraphEdge, GraphNode, GraphState
 from backend.mcp.allowlist import allowed, is_write_tool
+
+
+# --- fake client OpenAI-compatible (sem rede) para exercitar o linker semântico ---
+class _FakeCompletions:
+    def __init__(self, content):
+        self.content = content
+
+    async def create(self, **kwargs):
+        msg = type("Msg", (), {"content": self.content})()
+        choice = type("Choice", (), {"message": msg})()
+        return type("Resp", (), {"choices": [choice]})()
+
+
+class _FakeClient:
+    def __init__(self, content):
+        self.chat = type("Chat", (), {"completions": _FakeCompletions(content)})()
 
 
 def test_links_to_drive_from_email_body():
@@ -60,6 +76,44 @@ def test_allowlist_blocks_writes_allows_reads():
     assert allowed("gmail_search", "busca", extra_allow=set(), extra_deny=set())
     # override por denylist
     assert not allowed("gmail_search", "busca", extra_allow=set(), extra_deny={"gmail_search"})
+
+
+def test_build_candidates_cap_e_prioridade():
+    # Fixture de 300 nós: corta em 80, e os nós do turno atual entram com prioridade.
+    st = GraphState()
+    for i in range(300):
+        st.add_node(GraphNode(f"n{i}", "person", f"P{i}", "gmail",
+                              first_seen_turn=(2 if i < 5 else 1), props={}))
+    cands, total = build_candidates(st, turn=2, cap=80)
+    assert total == 300 and len(cands) == 80
+    ids = {c["id"] for c in cands}
+    assert all(f"n{i}" in ids for i in range(5))            # os 5 do turno atual entram
+    assert set(cands[0].keys()) == {"id", "tipo", "rotulo", "data"}   # lista compacta
+
+
+async def test_linker_json_invalido_registra_health_e_nao_promove():
+    # (a) JSON inválido não zera relevant_ids em silêncio: health.failed + turno só determinístico.
+    st = GraphState()
+    st.add_node(GraphNode("calendar:e", "calendar_event", "Comitê", "calendar", 1, props={}))
+    st.add_node(GraphNode("genie:x", "genie_answer", "Carteira", "genie", 1, props={}))
+    client = _FakeClient("isto não é json { quebrado")
+    nodes, edges, relevant = await semantic_links(client, "m", st, 1, 0.6, answer_text="algo")
+    assert nodes == [] and edges == [] and relevant == set()
+    h = st.linker_health
+    assert h["failed"] is True and h["parsed"] is False and h["error"]
+
+
+async def test_linker_json_valido_promove_relevantes():
+    st = GraphState()
+    st.add_node(GraphNode("calendar:e", "calendar_event", "Comitê", "calendar", 1, props={}))
+    st.add_node(GraphNode("genie:x", "genie_answer", "Carteira", "genie", 1, props={}))
+    payload = ('{"edges": [{"source": "genie:x", "target": "calendar:e", "confidence": 0.9, '
+               '"rationale": "mesmo tema"}], "mentions": [], "relevant_node_ids": ["calendar:e"]}')
+    client = _FakeClient(payload)
+    nodes, edges, relevant = await semantic_links(client, "m", st, 1, 0.6, answer_text="algo")
+    assert relevant == {"calendar:e"}
+    assert any(e.type == "related_to" for e in edges)
+    assert st.linker_health["failed"] is False and st.linker_health["relevant"] == 1
 
 
 def test_precedencia_deterministica_pair_linked():

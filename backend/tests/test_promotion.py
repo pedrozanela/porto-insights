@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from backend.graph.promotion import enforce_no_orphans, promote, promote_ids, visible_delta
+from backend.graph.extractors.calendar import extract_calendar
+from backend.graph.promotion import (
+    bare_visible_events, enforce_no_orphans, promote, promote_ids, visible_delta,
+)
 from backend.graph.schema import GraphEdge, GraphNode, GraphState, is_visible
 
 
@@ -221,3 +224,43 @@ def test_invariante_unico_no_preservado():
     st.add_node(GraphNode("drive:only", "drive_file", "Doc solitário", "drive", 1, props={"staged": False}))
     assert enforce_no_orphans(st, asked_text="") == []   # único nó → mantido
     assert is_visible(st.nodes["drive:only"])
+
+
+# ---------------------------------------------------------------- item 1: enriquecimento determinístico
+
+def test_enriquecimento_deterministico_evento_sem_participantes():
+    # Resposta cita 2 eventos; o modelo abriu só A. B (só título) fica sem participantes → o
+    # backend faz o get de B; após reaplicar a promoção, os 2 aparecem com participantes.
+    st = GraphState()
+    st.add_node(staged("calendar:A", "calendar_event", "Comitê X — Porto Bank",
+                       summary="Comitê X — Porto Bank", start="2026-09-14T11:00:00-03:00"))
+    st.add_node(staged("person:fer", "person", "Fernando Custodio", email="fernando@x.com"))
+    st.add_edge(_edge("calendar:A", "attendee", "person:fer"))
+    st.add_node(staged("calendar:B", "calendar_event", "BR SA Tech Weekly Meeting",
+                       summary="BR SA Tech Weekly Meeting", start="2026-09-16T11:00:00-03:00"))
+    ans = "Você tem “Comitê X — Porto Bank” e “BR SA Tech Weekly Meeting” com o Fernando Custodio."
+    asked = "o que tenho com Fernando Custodio esta semana"
+    promote(st, answer_text=ans, relevant_ids=set(), asked_text=asked)
+    assert is_visible(st.nodes["calendar:B"])
+    assert [n.id for n in bare_visible_events(st)] == ["calendar:B"]  # B precisa de get do backend
+
+    # simula o get determinístico do backend trazendo os participantes de B
+    nodes, _ = extract_calendar(st, "calendar_event_get", {
+        "id": "B", "summary": "BR SA Tech Weekly Meeting",
+        "start": {"dateTime": "2026-09-16T11:00:00-03:00"},
+        "organizer": {"email": "org@x.com", "displayName": "Org Z"},
+        "attendees": [{"email": "fernando@x.com", "displayName": "Fernando Custodio"},
+                      {"email": "p1@x.com", "displayName": "P Um"},
+                      {"email": "p2@x.com", "displayName": "P Dois"}]}, 1)
+    for n in nodes:
+        if n.id != "calendar:B":
+            n.props["staged"] = True
+    st.nodes["calendar:B"].props["bare_enriched"] = True
+
+    promote(st, answer_text=ans, relevant_ids=set(), asked_text=asked)  # reaplica (colapso)
+    enforce_no_orphans(st, asked_text=asked)
+    assert is_visible(st.nodes["calendar:A"]) and is_visible(st.nodes["calendar:B"])
+    assert not bare_visible_events(st)                        # B já não é "bare"
+    assert is_visible(st.nodes["person:fer"])                 # perguntado, ligado a ambos
+    # B mostra +N (p1/p2 colapsados)
+    assert st.nodes["calendar:B"].props.get("staged_participants", 0) >= 1

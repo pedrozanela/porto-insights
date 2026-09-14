@@ -334,6 +334,21 @@ def promote_ids(state: GraphState, ids: list[str], *, asked_text: str = "") -> s
     return promoted
 
 
+def bare_visible_events(state: GraphState) -> list:
+    """Eventos VISÍVEIS sem participante carregado (sem aresta attendee/organizer) e ainda não
+    enriquecidos — candidatos ao `get` determinístico do backend (item 1). Ignora provisórios."""
+    with_people: set[str] = set()
+    for e in state.edges.values():
+        if e.type in ("attendee", "organizer"):
+            for end in (e.source, e.target):
+                n = state.nodes.get(end)
+                if n and n.type == "calendar_event":
+                    with_people.add(n.id)
+    return [n for n in state.nodes.values()
+            if n.type == "calendar_event" and is_visible(n) and not n.props.get("provisional")
+            and not n.props.get("bare_enriched") and n.id not in with_people]
+
+
 def visible_delta(state: GraphState):
     """Todos os nós/arestas visíveis (o frontend deduplica por id)."""
     nodes = [n for n in state.nodes.values() if is_visible(n)]
@@ -356,4 +371,5 @@ def debug_snapshot(state: GraphState) -> dict:
     visible = [r for r in rows if r["visible"]]
     staging = [r for r in rows if not r["visible"]]
     return {"visible": visible, "staging": staging, "edges": edges,
+            "linker": getattr(state, "linker_health", None),  # saúde do linker (item 2e)
             "counts": {"visible": len(visible), "staging": len(staging), "edges": len(edges)}}

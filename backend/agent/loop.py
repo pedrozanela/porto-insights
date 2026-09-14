@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import AsyncIterator
 
 import anyio
@@ -22,7 +23,7 @@ from ..graph.extractors.genie import extract_genie
 from ..graph.linker import (
     NODE_CREATING_TOOLS, deterministic_links, extract_from_tool, reconcile_provisionals, semantic_links,
 )
-from ..graph.promotion import enforce_no_orphans, promote, visible_delta
+from ..graph.promotion import bare_visible_events, enforce_no_orphans, promote, visible_delta
 from ..graph.schema import GraphNode, delta_payload, is_visible
 from ..graph.suggestions import build_suggestions
 from ..graph.store import GraphStore
@@ -154,6 +155,34 @@ async def _enrich_drive_stubs(user, state, turn, registry) -> None:
         if not n.label or n.label == "(documento)":
             n.label = "Documento sem título"
         n.props["stub_resolved"] = True
+
+
+async def _enrich_bare_events(user, state, turn, registry) -> int:
+    """Item 1: evento promovido por casamento de título que não tem participantes carregados
+    recebe um `calendar_event_get` feito pelo BACKEND (não depende do prompt). Limite 5/turno,
+    cache por event id (props.bare_enriched). Retorna quantos eventos foram enriquecidos."""
+    if not registry:
+        return 0
+    get_tool = next((n for n, s in registry.service_name.items()
+                     if s == "calendar" and n == "calendar_event_get"), None)
+    if not get_tool:
+        return 0
+    url = registry.service_url.get(get_tool)
+    done = 0
+    for ev in bare_visible_events(state)[:5]:
+        ev.props["bare_enriched"] = True  # marca antes p/ não repetir mesmo em erro
+        raw = ev.id.split("calendar:", 1)[-1]
+        try:
+            async with mcp_session(url, user.token, timeout=45) as s:
+                data = structured(await s.call_tool("calendar_event_get", {"event_id": raw}))
+            nodes, _ = extract_from_tool(state, "calendar", "calendar_event_get", data, turn)
+            for n in nodes:
+                if n.id != ev.id:  # participantes/anexos entram em staging; o evento continua visível
+                    n.props["staged"] = True
+            done += 1
+        except Exception as e:  # noqa: BLE001
+            logger.info("enrich_bare_events: get(%s) falhou (%s)", raw, type(e).__name__)
+    return done
 
 
 async def _enrich_provisional_events(user, settings, graph, conversation_id, turn, registry) -> None:
@@ -313,6 +342,9 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
     final_answer = ""  # só a resposta do turno (não a narração pré-tool) é persistida
     used_tools = False
     tool_call_count = 0
+    turn_t0 = time.monotonic()  # latência (item 3): total, Genie, linker
+    genie_ms = 0.0
+    linker_ms = 0.0
 
     try:
         for _iteration in range(settings.agent_max_tool_iterations):
@@ -349,6 +381,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                     yield sse("tool_call_start", tool="genie__ask", label="Perguntando ao Genie One…",
                               args={"question": question})
                     compact = "Sem resultado."
+                    _g0 = time.monotonic()
                     async for out in _run_genie_tool(user, settings, store, graph, conversation_id,
                                                       turn, question, bool(args.get("follow_up"))):
                         if out["kind"] == "progress":
@@ -359,6 +392,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                             yield sse("graph_delta", **out["delta"])
                         elif out["kind"] == "compact":
                             compact = out["text"]
+                    genie_ms += (time.monotonic() - _g0) * 1000
                     working.append({"role": "tool", "tool_call_id": tc["id"], "content": compact})
 
                 elif registry and name in registry.service_url:
@@ -405,13 +439,21 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
             # Linker semântico (vê todos os nós, inclusive staging) → related_to, mentions e
             # relevant_node_ids. Determinístico ANTES da promoção: cria links_to/same_time_window
             # para o fechamento estrutural e o invariante sem-órfãos verem todas as arestas.
+            _l0 = time.monotonic()
             sem_nodes, sem_edges, relevant_ids = await semantic_links(
                 client, model, state, turn, settings.semantic_linker_min_confidence,
                 answer_text=final_answer)
+            linker_ms += (time.monotonic() - _l0) * 1000
             deterministic_links(state, turn, settings.time_window_days)
             # Promoção por evidência (semente + fechamento estrutural + colapso + anexos).
             promoted_ids = promote(state, answer_text=final_answer, relevant_ids=relevant_ids,
                                    asked_text=user_message)
+            # Item 1: eventos promovidos por título sem participantes → get determinístico do
+            # backend e reaplica a promoção (colapso traz os participantes) ANTES do sem-órfãos.
+            if calendar_ok and await _enrich_bare_events(user, state, turn, registry):
+                deterministic_links(state, turn, settings.time_window_days)
+                promoted_ids |= promote(state, answer_text=final_answer, relevant_ids=relevant_ids,
+                                        asked_text=user_message)
 
             # A2: se o modelo abriu vários eventos candidatos e só 1 é a evidência, registra no trace.
             opened_ev = [n for n in state.nodes.values()
@@ -454,4 +496,9 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
     graph_nodes = len([n for n in graph.get(user.email, conversation_id).nodes.values()
                        if is_visible(n) and not n.props.get("is_self")])
     trace_turn(model=model, question=user_message, tool_calls=tool_call_count, graph_nodes=graph_nodes)
-    yield sse("done", conversation_id=conversation_id, model=model)
+    # Latência (item 3): total, nº de tool calls, tempo do Genie e do linker deste turno.
+    total_ms = round((time.monotonic() - turn_t0) * 1000)
+    timing = {"total_ms": total_ms, "tool_calls": tool_call_count,
+              "genie_ms": round(genie_ms), "linker_ms": round(linker_ms)}
+    logger.info("turn timing model=%s %s", model, timing)
+    yield sse("done", conversation_id=conversation_id, model=model, timing=timing)

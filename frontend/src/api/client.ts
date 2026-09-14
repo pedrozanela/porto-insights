@@ -28,6 +28,10 @@ export interface DebugGraph {
   visible: DebugGraphRow[];
   staging: DebugGraphRow[];
   edges: { source: string; target: string; type: string; visible: boolean }[];
+  linker?: {
+    input_size?: number; listed?: number; mode?: string;
+    parsed?: boolean; failed?: boolean; error?: string | null; relevant?: number;
+  } | null;
   counts: { visible: number; staging: number; edges: number };
 }
 

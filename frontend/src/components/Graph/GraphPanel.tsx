@@ -317,6 +317,13 @@ export function GraphPanel({
                     <span className="font-semibold text-textc">Staging ({staging.counts.staging})</span>
                     <button onClick={() => setStaging(null)} className="text-muted hover:text-textc">✕</button>
                   </div>
+                  {staging.linker && (
+                    <div className={`mb-1 rounded px-1.5 py-1 ${staging.linker.failed ? "bg-amber-100 text-amber-800" : "bg-surfaceMuted text-muted"}`}>
+                      linker: {staging.linker.failed ? `falhou — ${staging.linker.error || "?"}` : "ok"}
+                      {" "}· entrada {staging.linker.input_size ?? "?"} (listados {staging.linker.listed ?? "?"})
+                      {" "}· relevantes {staging.linker.relevant ?? 0}
+                    </div>
+                  )}
                   {staging.staging.length === 0 && <p className="text-muted">Nenhum nó em staging.</p>}
                   {staging.staging.map((r) => (
                     <div key={r.id} className="border-b border-borderc py-1">
