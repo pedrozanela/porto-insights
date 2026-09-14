@@ -34,44 +34,45 @@ export function configureForces(fg: ForceGraphLike, opts: ForceOptions): void {
 }
 
 /**
- * Reaquecimento suave a cada graph_delta: fixa (fx/fy) os nós já existentes na posição atual,
- * reaquece a simulação e libera os fixados após 1s — assim só os nós NOVOS se acomodam e o resto
- * não pula. Não libera nós com pin temporário de arraste (__dragPin).
+ * Reaquecimento a cada graph_delta: fixa (fx/fy) os nós já existentes na posição atual e reaquece,
+ * para só os NOVOS se acomodarem. Retorna a lista fixada — a LIBERAÇÃO é do componente, por
+ * resfriamento (onEngineStop / alpha baixo) com teto de 3s, NÃO por timer com a simulação quente.
  */
-export function reheatWithPins(
+export function pinExisting(
   fg: ForceGraphLike,
   nodes: PhysNode[],
   isExisting: (id: string) => boolean,
-  holdMs = 1000,
-): void {
+): PhysNode[] {
   const pinned: PhysNode[] = [];
   for (const n of nodes) {
     if (isExisting(n.id) && typeof n.x === "number" && typeof n.y === "number") {
-      n.fx = n.x;
-      n.fy = n.y;
+      n.fx = n.x; n.fy = n.y;
       pinned.push(n);
     }
   }
   fg.d3ReheatSimulation();
-  setTimeout(() => {
-    for (const n of pinned) {
-      if (!n.__dragPin) { n.fx = undefined; n.fy = undefined; }
-    }
-    fg.d3ReheatSimulation();
-  }, holdMs);
+  return pinned;
 }
 
-/** Pin temporário ao soltar um nó arrastado: fica onde foi solto por `holdMs`, depois reacomoda. */
-export function pinAfterDrag(fg: ForceGraphLike, node: PhysNode, holdMs = 2000): void {
+/** Libera fx/fy dos nós fixados (exceto os com pin de arraste ativo). */
+export function releasePins(nodes: PhysNode[]): void {
+  for (const n of nodes) {
+    if (!n.__dragPin) { n.fx = undefined; n.fy = undefined; }
+  }
+}
+
+/** Pin ao soltar um nó arrastado: fica onde foi solto até o resfriamento (o componente libera). */
+export function pinAfterDrag(node: PhysNode): void {
   node.__dragPin = true;
   node.fx = node.x;
   node.fy = node.y;
-  setTimeout(() => {
-    node.__dragPin = false;
-    node.fx = undefined;
-    node.fy = undefined;
-    fg.d3ReheatSimulation();
-  }, holdMs);
+}
+
+/** Libera o pin de arraste de um nó. */
+export function releaseDragPin(node: PhysNode): void {
+  node.__dragPin = false;
+  node.fx = undefined;
+  node.fy = undefined;
 }
 
 /** Ponto de extensão para a fase de episódios: ancorar nós de cada episódio numa região. No-op

@@ -28,7 +28,13 @@ export const nodeColors: Record<string, string> = {
 
 // Parâmetros de interação/aparência do grafo (fonte única; consumidos por graphStyle/graphPhysics).
 export const graph = {
-  lod: { far: 0.6, near: 1.4 },              // limiares de zoom (globalScale)
+  // LOD relativo à escala do "Ajustar à tela": no fit o grafo cai na faixa MÉDIA (ícones +
+  // rótulos), nunca em "longe". far/near = fatores da escala do fit, com piso/teto absolutos.
+  lod: {
+    farFactor: 0.55, nearFactor: 1.6,
+    farFloor: 0.12, farCeil: 0.9,
+    nearFloor: 0.9, nearCeil: 4.0,
+  },
   alpha: {
     structural: 0.2,                          // arestas estruturais
     semantic: 0.3,                            // arestas related_to

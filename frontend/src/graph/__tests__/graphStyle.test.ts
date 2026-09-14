@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  emptyCtx, lodBand, resolveLinkState, resolveNodeState, showEdgeLabel,
+  emptyCtx, lodBand, lodThresholds, resolveLinkState, resolveNodeState, showEdgeLabel,
   showIcon, showNodeLabel, type StyleCtx, type StyleNode,
 } from "../graphStyle";
 
@@ -81,10 +81,18 @@ describe("resolveLinkState", () => {
 });
 
 describe("LOD", () => {
-  it("faixas por zoom", () => {
-    expect(lodBand(0.4)).toBe("far");
-    expect(lodBand(1.0)).toBe("mid");
-    expect(lodBand(2.0)).toBe("near");
+  it("no fit (scale ≈ fitScale) a faixa é MÉDIA, não longe — inclusive p/ grafo grande", () => {
+    const bigFit = 0.35;                          // fit típico de ~40 nós
+    const th = lodThresholds(bigFit);
+    expect(lodBand(bigFit, th)).toBe("mid");       // ícones + rótulos no fit
+    expect(lodBand(bigFit * 0.4, th)).toBe("far"); // só zoom manual bem abaixo do fit → longe
+    expect(lodBand(bigFit * 3, th)).toBe("near");
+  });
+
+  it("limiares relativos com piso/teto", () => {
+    const th = lodThresholds(1.0);
+    expect(th.far).toBeCloseTo(0.55);
+    expect(th.near).toBeCloseTo(1.6);
   });
 
   it("ícone some no far", () => {

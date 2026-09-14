@@ -107,9 +107,24 @@ export function nodeColor(node: StyleNode): string {
 
 // ---------------------------------------------------------------- LOD (nível de detalhe por zoom)
 
-export function lodBand(scale: number): LodBand {
-  if (scale < G.lod.far) return "far";
-  if (scale < G.lod.near) return "mid";
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+export interface LodThresholds { far: number; near: number; }
+
+/** Limiares de LOD derivados da escala do "Ajustar à tela": no fit (scale ≈ fitScale) o grafo fica
+ * na faixa MÉDIA; "longe" só por zoom manual abaixo do fit. Piso/teto absolutos vêm de theme. */
+export function lodThresholds(fitScale: number): LodThresholds {
+  const f = G.lod;
+  const s = fitScale > 0 ? fitScale : 1;
+  return {
+    far: clamp(f.farFactor * s, f.farFloor, f.farCeil),
+    near: clamp(f.nearFactor * s, f.nearFloor, f.nearCeil),
+  };
+}
+
+export function lodBand(scale: number, th: LodThresholds): LodBand {
+  if (scale < th.far) return "far";
+  if (scale < th.near) return "mid";
   return "near";
 }
 

@@ -6,17 +6,19 @@ import { shortLabel, EDGE_LABELS } from "../../graph/labels";
 import { glyph, glyphType } from "../../graph/glyphs";
 import { buildNeighbors, degreeMap } from "../../graph/graphModel";
 import {
-  edgeDash, lodBand, nodeColor, radiusOf, resolveLinkState, resolveNodeState,
+  edgeDash, lodBand, lodThresholds, nodeColor, radiusOf, resolveLinkState, resolveNodeState,
   showEdgeLabel, showIcon, showNodeLabel, type StyleCtx,
 } from "../../graph/graphStyle";
-import { configureForces, pinAfterDrag, reheatWithPins } from "../../graph/graphPhysics";
+import {
+  configureForces, pinAfterDrag, pinExisting, releaseDragPin, releasePins,
+} from "../../graph/graphPhysics";
 import { fixtureFromUrl } from "../../graph/graphFixture";
 import { NodeDetail } from "./NodeDetail";
 import { fetchDebugGraph, type DebugGraph } from "../../api/client";
 
 const MIN_ZOOM = 0.2, MAX_ZOOM = 8;
+const PIN_CAP_MS = 3000;  // teto p/ liberar pins se o resfriamento demorar
 
-// medidor de texto compartilhado (largura de rótulo para colisão/fit/colisão física)
 const _measure = document.createElement("canvas").getContext("2d");
 function labelWidth(text: string, px: number): number {
   if (!_measure) return text.length * px * 0.6;
@@ -37,7 +39,7 @@ export function GraphPanel({
   debugGraph?: boolean;
   conversationId?: string;
 }) {
-  const graph = useMemo(() => fixtureFromUrl() ?? graphProp, [graphProp]); // dev: ?fixture=N
+  const graph = useMemo(() => fixtureFromUrl() ?? graphProp, [graphProp]);
   const rootRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
@@ -47,14 +49,19 @@ export function GraphPanel({
   const [hideSelf, setHideSelf] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [staging, setStaging] = useState<DebugGraph | null>(null);
-  const [focusId, setFocusId] = useState<string | null>(null);
-  const [focusPinned, setFocusPinned] = useState(false);
 
-  const manualRef = useRef(false);                 // usuário deu pan/zoom → suspende auto-fit
-  const alphaRef = useRef<Map<string, number>>(new Map());  // alpha suavizado por nó
-  const animateUntil = useRef(0);                  // dispara refresh() até este instante
+  // Estado de INTERAÇÃO em refs (lidos dentro de nodeCanvasObject/linkCanvasObject) — sem setState
+  // por frame/hover; o redesenho é dirigido pelo loop de refresh (animateUntil).
+  const focusIdRef = useRef<string | null>(null);
+  const focusPinnedRef = useRef(false);
+  const manualRef = useRef(false);
+  const alphaRef = useRef<Map<string, number>>(new Map());
+  const animateUntil = useRef(0);
+  const fitScaleRef = useRef(1);                // escala do último fit → base do LOD
+  const pinnedRef = useRef<any[]>([]);          // nós fixados no reaquecimento
+  const dragPinsRef = useRef<Set<any>>(new Set());
+  const capTimerRef = useRef<number | null>(null);
 
-  // --- estrutura (recalculada só quando o grafo muda, não por frame) ---
   const degree = useMemo(() => degreeMap(graph.edges), [graph.edges]);
   const neighbors = useMemo(() => buildNeighbors(graph.edges), [graph.edges]);
   const types = useMemo(() => [...new Set(graph.nodes.map((n) => n.type))], [graph.nodes]);
@@ -62,8 +69,7 @@ export function GraphPanel({
     () => graph.nodes.filter((n) => !n.props?.is_self).length, [graph.nodes]);
   const empty = graph.nodes.length === 0;
 
-  // graphData: REUSA objetos de nó (preserva posição) e recria o container só quando o conjunto
-  // muda. Nunca por render de foco/hover.
+  // graphData: REUSA objetos de nó (preserva posição) e recria o container só quando o conjunto muda.
   const nodeObjs = useRef<Map<string, any>>(new Map());
   const data = useMemo(() => {
     const map = nodeObjs.current;
@@ -91,18 +97,17 @@ export function GraphPanel({
     return { nodes, links };
   }, [graph, hidden, hideSelf]);
 
-  // contexto de estilo (foco/LOD). localMode e replay entram nos próximos blocos.
-  const ctx: StyleCtx = useMemo(() => ({
-    focusNodeId: focusId,
-    focusPinned,
-    focusNeighbors: focusId ? (neighbors.get(focusId) ?? new Set<string>()) : new Set<string>(),
+  // contexto de estilo montado a partir dos REFS (localMode/replay entram nos próximos blocos)
+  const buildCtx = (): StyleCtx => ({
+    focusNodeId: focusIdRef.current,
+    focusPinned: focusPinnedRef.current,
+    focusNeighbors: focusIdRef.current ? (neighbors.get(focusIdRef.current) ?? new Set<string>()) : new Set<string>(),
     localMode: null,
     replay: null,
     recentTurn: graph.lastTurn,
     episode: null,
-  }), [focusId, focusPinned, neighbors, graph.lastTurn]);
+  });
 
-  // --- easing de alpha por nó (converge com refresh() enquanto animateUntil ativo) ---
   const easedAlpha = (id: string, target: number): number => {
     const cur = alphaRef.current.get(id);
     if (cur === undefined) { alphaRef.current.set(id, target); return target; }
@@ -111,6 +116,8 @@ export function GraphPanel({
     alphaRef.current.set(id, v);
     return v;
   };
+
+  const bumpAnim = (ms = 400) => { animateUntil.current = Date.now() + ms; };
 
   // --- observers e loops ---
   useEffect(() => {
@@ -122,7 +129,7 @@ export function GraphPanel({
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {  // loop de refresh só quando há animação de alpha/pulso pendente
+  useEffect(() => {   // refresh() só enquanto há transição de alpha/pulso pendente
     let raf = 0;
     const tick = () => {
       if (Date.now() < animateUntil.current) fgRef.current?.refresh?.();
@@ -132,25 +139,30 @@ export function GraphPanel({
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  useEffect(() => {  // mudou o foco → anima a transição de alpha por ~350ms
-    animateUntil.current = Date.now() + 350;
-  }, [focusId]);
-
   useEffect(() => {
     const onFs = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", onFs);
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  useEffect(() => {   // hook só de dev p/ dirigir zoom/foco nas telas de teste (checkpoint A)
+  useEffect(() => {   // hook só de dev p/ dirigir zoom/foco nas telas de teste
     if (!(import.meta as any).env?.DEV) return;
     (window as any).__graphDev = {
       fg: fgRef.current,
-      focus: (id: string) => { setFocusId(id); setFocusPinned(true); animateUntil.current = Date.now() + 400; },
-      hover: (id: string | null) => { setFocusPinned(false); setFocusId(id); animateUntil.current = Date.now() + 400; },
+      focus: (id: string) => { focusIdRef.current = id; focusPinnedRef.current = true; bumpAnim(); },
+      hover: (id: string | null) => { focusPinnedRef.current = false; focusIdRef.current = id; bumpAnim(); },
       fit: () => { manualRef.current = false; fitToScreen(); },
     };
   });
+
+  // libera todos os pins (reaquecimento + arraste) — chamado no resfriamento ou no teto de 3s
+  const releaseAllPins = () => {
+    if (capTimerRef.current) { clearTimeout(capTimerRef.current); capTimerRef.current = null; }
+    releasePins(pinnedRef.current);
+    pinnedRef.current = [];
+    dragPinsRef.current.forEach((n) => releaseDragPin(n));
+    dragPinsRef.current.clear();
+  };
 
   // configura forças + reaquece com pin dos existentes + auto-fit, a cada delta
   useEffect(() => {
@@ -160,23 +172,25 @@ export function GraphPanel({
       collideRadius: (n: any) => radiusOf(degree.get(n.id) || 0, !!n.props?.is_self)
         + labelWidth(shortLabel(n), G.labelBase) / 2 + 4,
     });
-    reheatWithPins(fg, data.nodes, (id) => nodeObjs.current.get(id)?.first_seen_turn !== graph.lastTurn);
+    pinnedRef.current = pinExisting(fg, data.nodes,
+      (id) => nodeObjs.current.get(id)?.first_seen_turn !== graph.lastTurn);
+    if (capTimerRef.current) clearTimeout(capTimerRef.current);
+    capTimerRef.current = window.setTimeout(releaseAllPins, PIN_CAP_MS);   // teto de 3s
     manualRef.current = false;
-    animateUntil.current = Date.now() + 3200;   // pulso dos novos ~3s
-    const t = setTimeout(() => { if (!manualRef.current) fitToScreen(); }, 450);
+    bumpAnim(3200);   // pulso dos novos ~3s
+    const t = setTimeout(() => { if (!manualRef.current) fitToScreen(); }, 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph.lastTurn, size.w, data.nodes.length]);
 
-  // --- enquadramento (inclui os retângulos dos rótulos; 1–3 nós ocupam ~40% da largura) ---
+  // --- enquadramento (inclui rótulos; grava a escala do fit → base do LOD) ---
   const fitToScreen = () => {
     const fg = fgRef.current;
     if (!fg || !data.nodes.length) return;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    let count = 0;
+    const ctx = buildCtx();
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, count = 0;
     for (const n of data.nodes as any[]) {
-      if (typeof n.x !== "number") continue;
-      if (!resolveNodeState(n, ctx).visible) continue;
+      if (typeof n.x !== "number" || !resolveNodeState(n, ctx).visible) continue;
       const r = radiusOf(degree.get(n.id) || 0, !!n.props?.is_self);
       const halfW = Math.max(r, labelWidth(shortLabel(n), G.labelBase) / 2 + 3);
       minX = Math.min(minX, n.x - halfW); maxX = Math.max(maxX, n.x + halfW);
@@ -187,8 +201,9 @@ export function GraphPanel({
     const pad = 40;
     const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
     let scale = Math.min((size.w - pad * 2) / w, (size.h - pad * 2) / h);
-    if (count <= 3) scale = (size.w * 0.4) / w;    // nó + rótulo ~40% da largura
+    if (count <= 3) scale = (size.w * 0.4) / w;
     scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale));
+    fitScaleRef.current = scale;
     fg.centerAt((minX + maxX) / 2, (minY + maxY) / 2, 600);
     fg.zoom(scale, 600);
   };
@@ -207,7 +222,7 @@ export function GraphPanel({
     else el.requestFullscreen?.();
   };
 
-  const clearFocus = () => { setFocusId(null); setFocusPinned(false); };
+  const clearFocus = () => { focusIdRef.current = null; focusPinnedRef.current = false; bumpAnim(); };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.4); }
@@ -221,18 +236,19 @@ export function GraphPanel({
 
   // --- desenho ---
   const drawNode = (node: any, c: CanvasRenderingContext2D, scale: number) => {
+    const ctx = buildCtx();
     const st = resolveNodeState(node, ctx);
     if (!st.visible) return;
     const a = easedAlpha(node.id, st.alpha);
     if (a < 0.03) return;
-    const band = lodBand(scale);
+    const band = lodBand(scale, lodThresholds(fitScaleRef.current));
     const self = !!node.props?.is_self;
     const deg = degree.get(node.id) || 0;
     const r = radiusOf(deg, self) / scale;
     const color = nodeColor(node);
     c.globalAlpha = a;
 
-    if (st.emphasis === "new" && Date.now() < animateUntil.current) {  // pulso dos novos
+    if (st.emphasis === "new" && Date.now() < animateUntil.current) {
       const pulse = 1 + 0.4 * Math.abs(Math.sin(Date.now() / 250));
       c.beginPath(); c.arc(node.x, node.y, r * 1.7 * pulse, 0, 2 * Math.PI);
       c.fillStyle = color + "22"; c.fill();
@@ -255,7 +271,7 @@ export function GraphPanel({
       if (g) { const s = r * 1.3; c.drawImage(g, node.x - s / 2, node.y - s / 2, s, s); }
     }
 
-    if (showNodeLabel(band, node, deg, ctx)) {
+    if (showNodeLabel(band, node, deg, ctx)) {   // rótulo do nó em foco aparece em qualquer LOD
       const label = shortLabel(node);
       const fs = G.labelBase / scale;
       c.font = `${fs}px system-ui`;
@@ -281,10 +297,8 @@ export function GraphPanel({
     c.globalAlpha = 1;
   };
 
-  // retângulo do rótulo de um nó (coords do grafo) — para evitar colisão com rótulos de aresta
   const nodeLabelRect = (nd: any, c: CanvasRenderingContext2D, scale: number) => {
-    const deg = degree.get(nd.id) || 0;
-    const r = radiusOf(deg, !!nd.props?.is_self) / scale;
+    const r = radiusOf(degree.get(nd.id) || 0, !!nd.props?.is_self) / scale;
     const nfs = G.labelBase / scale;
     c.font = `${nfs}px system-ui`;
     const nw = c.measureText(shortLabel(nd)).width;
@@ -296,6 +310,7 @@ export function GraphPanel({
   const drawLink = (link: any, c: CanvasRenderingContext2D, scale: number) => {
     const s = link.source, t = link.target;
     if (typeof s !== "object" || typeof t !== "object") return;
+    const ctx = buildCtx();
     const ss = resolveNodeState(s, ctx), ts = resolveNodeState(t, ctx);
     const sa = { ...ss, alpha: easedAlpha(s.id, ss.alpha) };
     const ta = { ...ts, alpha: easedAlpha(t.id, ts.alpha) };
@@ -309,7 +324,7 @@ export function GraphPanel({
     if (dash) c.setLineDash(dash); else c.setLineDash([]);
     c.stroke(); c.setLineDash([]);
 
-    const band = lodBand(scale);
+    const band = lodBand(scale, lodThresholds(fitScaleRef.current));
     if (!showEdgeLabel(band, ls, ctx)) return;
     const txt = EDGE_LABELS[link.type] || link.type;
     const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
@@ -318,7 +333,7 @@ export function GraphPanel({
     const w = c.measureText(txt).width;
     const er = { x0: mx - w / 2 - 2 / scale, y0: my - fs / 2 - 1 / scale,
                  x1: mx + w / 2 + 2 / scale, y1: my + fs / 2 + 1 / scale };
-    for (const nd of data.nodes as any[]) {   // oculta rótulo de aresta que colide com rótulo de nó
+    for (const nd of data.nodes as any[]) {
       if (typeof nd.x !== "number" || !resolveNodeState(nd, ctx).visible) continue;
       const b = nodeLabelRect(nd, c, scale);
       if (er.x0 < b.x1 && er.x1 > b.x0 && er.y0 < b.y1 && er.y1 > b.y0) return;
@@ -331,12 +346,11 @@ export function GraphPanel({
   };
 
   const paintPointer = (node: any, color: string, c: CanvasRenderingContext2D, scale: number) => {
-    if (!resolveNodeState(node, ctx).visible) return;
-    const self = !!node.props?.is_self;
-    const r = radiusOf(degree.get(node.id) || 0, self) / scale;
+    if (!resolveNodeState(node, buildCtx()).visible) return;
+    const r = radiusOf(degree.get(node.id) || 0, !!node.props?.is_self) / scale;
     c.fillStyle = color;
     c.beginPath(); c.arc(node.x, node.y, r + 2 / scale, 0, 2 * Math.PI); c.fill();
-    const b = nodeLabelRect(node, c, scale);   // hit-area cobre o rótulo também
+    const b = nodeLabelRect(node, c, scale);   // hit-area cobre o rótulo (hover no rótulo foca)
     c.fillRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
   };
 
@@ -389,13 +403,15 @@ export function GraphPanel({
                 d3VelocityDecay={0.3}
                 enableNodeDrag
                 onZoom={() => { manualRef.current = true; }}
-                onEngineStop={() => { if (!manualRef.current) fitToScreen(); }}
-                onNodeHover={(n: any) => { if (!focusPinned) setFocusId(n?.id ?? null); }}
+                onEngineStop={() => { releaseAllPins(); if (!manualRef.current) fitToScreen(); }}
+                onNodeHover={(n: any) => {
+                  if (!focusPinnedRef.current) { focusIdRef.current = n?.id ?? null; bumpAnim(); }
+                }}
                 onNodeClick={(n: any) => {
-                  setFocusId(n.id); setFocusPinned(true);
+                  focusIdRef.current = n.id; focusPinnedRef.current = true; bumpAnim();
                   setSelected(graph.nodes.find((x) => x.id === n.id) ?? null);
                 }}
-                onNodeDragEnd={(n: any) => pinAfterDrag(fgRef.current, n)}
+                onNodeDragEnd={(n: any) => { pinAfterDrag(n); dragPinsRef.current.add(n); bumpAnim(); }}
                 onBackgroundClick={() => { clearFocus(); setSelected(null); }}
                 nodeLabel={(n: any) => {
                   const full = n.props?.title || n.label || "";
@@ -408,7 +424,6 @@ export function GraphPanel({
                 linkCanvasObject={drawLink}
               />
 
-              {/* Controles de zoom/enquadramento */}
               <div className="absolute bottom-3 right-3 flex flex-col items-stretch gap-1">
                 <div className="flex overflow-hidden rounded-md border border-borderc bg-surface/95 shadow-sm">
                   <button onClick={() => zoomBy(1.4)} title="Aproximar (+)"
@@ -484,7 +499,6 @@ export function GraphPanel({
   );
 }
 
-// Mini-ícone na legenda (reusa o glyph offscreen).
 function GlyphChip({ type }: { type: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
