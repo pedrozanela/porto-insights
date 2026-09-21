@@ -42,7 +42,8 @@ class ToolRegistry:
 def _short(svc: str) -> str:
     # system.ai.gmail → gmail ; system.ai.google_calendar → calendar ; google_drive → drive
     base = svc.split(".")[-1]
-    return {"google_calendar": "calendar", "google_drive": "drive"}.get(base, base)
+    return {"google_calendar": "calendar", "google_drive": "drive",
+            "web_search": "web"}.get(base, base)
 
 
 async def build_registry(

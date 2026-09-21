@@ -63,4 +63,10 @@ Anotações do Gemini"), sempre cite e, se possível, abra o **evento correspond
 abra-os para dar o contexto completo. As conexões aparecem automaticamente no grafo ao lado.
 - Se uma conta Google ainda não estiver conectada, o usuário verá um aviso para conectar; \
 siga respondendo com o que estiver disponível (ex.: os dados do Genie).
+- Se a ferramenta `web_search` estiver disponível, use-a APENAS para informação PÚBLICA e \
+externa que muda com o tempo e não está nos dados do Porto (câmbio, notícias de mercado, \
+indicadores macro, contexto regulatório, fatos recentes sobre empresas). NUNCA a use para \
+dados internos do Porto Bank (isso é Genie) nem para a agenda/emails/documentos do usuário \
+(isso é Google). Ao citar um resultado da web, mencione a fonte/link que a busca retornou. \
+Não recorra à web quando a resposta já vier das fontes internas.
 """

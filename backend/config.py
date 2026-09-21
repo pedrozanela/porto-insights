@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     mcp_tool_allowlist_extra: str = ""
     mcp_tool_denylist_extra: str = ""
 
+    # Web search MCP Service (system.ai.web_search): busca pública com citações, via AI Gateway
+    # (mesmo caminho OBO dos MCP Services do Google; escopo ai-gateway já cobre). Desligado por
+    # padrão — é a única fonte EXTERNA; ligar via MCP_WEB_SEARCH_ENABLED=true.
+    mcp_web_search_enabled: bool = Field(default=False, alias="MCP_WEB_SEARCH_ENABLED")
+    mcp_web_search_service: str = "system.ai.web_search"
+
     # Agente / grafo
     agent_max_tool_iterations: int = 14
     semantic_linker_min_confidence: float = 0.6
@@ -82,6 +88,14 @@ class Settings(BaseSettings):
     @property
     def google_services(self) -> list[str]:
         return [s.strip() for s in self.mcp_google_services.split(",") if s.strip()]
+
+    @property
+    def mcp_services(self) -> list[str]:
+        """Serviços MCP a descobrir no início do turno: Google + web_search (se habilitado)."""
+        svcs = list(self.google_services)
+        if self.mcp_web_search_enabled:
+            svcs.append(self.mcp_web_search_service)
+        return svcs
 
     def mcp_service_url(self, service: str) -> str:
         return f"{self.host_url}/ai-gateway/mcp-services/{service}"

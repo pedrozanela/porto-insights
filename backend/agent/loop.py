@@ -322,7 +322,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
     # Descobre as tools do Google (cache curto por usuário) + a tool composta do Genie.
     try:
         registry = await get_registry(
-            settings.host_url, user.token, settings.google_services,
+            settings.host_url, user.token, settings.mcp_services,
             extra_allow={s.strip() for s in settings.mcp_tool_allowlist_extra.split(",") if s.strip()},
             extra_deny={s.strip() for s in settings.mcp_tool_denylist_extra.split(",") if s.strip()},
         )
@@ -399,7 +399,8 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                 elif registry and name in registry.service_url:
                     service = registry.service_of(name)
                     label = {"gmail": "Buscando emails…", "calendar": "Consultando sua agenda…",
-                             "drive": "Procurando documentos…"}.get(service, "Consultando…")
+                             "drive": "Procurando documentos…",
+                             "web": "Pesquisando na web…"}.get(service, "Consultando…")
                     yield sse("tool_call_start", tool=name, label=label, args=args)
                     compact = "Sem resultado."
                     async for out in _run_google_tool(user, settings, graph, conversation_id, turn,
