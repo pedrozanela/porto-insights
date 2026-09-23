@@ -4,6 +4,7 @@ __pycache__/
 .env
 docs/_raw_*.txt
 node_modules/
-frontend/dist/
+# frontend/dist/ é versionado de propósito: o notebook de deploy (notebooks/deploy_porto_insights.py)
+# lê o source ao lado dele e não builda no workspace do cliente. Rebuild via scripts/build_frontend.sh.
 .DS_Store
 frontend/*.tsbuildinfo
