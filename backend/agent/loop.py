@@ -258,15 +258,28 @@ async def _run_genie_tool(user, settings, store, graph, conversation_id, turn, q
     yield {"kind": "compact", "text": compact_result_for_llm(result)}
 
 
+def _mcp_service_full(service_url: str) -> str:
+    """Extrai o nome completo do MCP Service da URL do gateway
+    (…/ai-gateway/mcp-services/system.ai.google_calendar → system.ai.google_calendar)."""
+    return service_url.rstrip("/").split("/")[-1]
+
+
+def _mcp_consent_url(host_url: str, service_full: str) -> str:
+    """Página de consentimento/login do MCP Service no Catalog Explorer.
+    NÃO é /explore/connections (isso é UC HTTP connection, outra coisa)."""
+    return f"{host_url}/explore/data/mcp-services/{service_full.replace('.', '/')}"
+
+
 async def _run_google_tool(user, settings, graph, conversation_id, turn, service, tool_name, service_url, args):
     """Executa uma tool do Google. Emite ('auth'|'graph'|'compact')."""
+    service_full = _mcp_service_full(service_url)
     try:
         async with mcp_session(service_url, user.token, timeout=60) as s:
             res = await s.call_tool(tool_name, args)
     except Exception as e:  # noqa: BLE001
         msg = str(e)
         if _looks_like_auth_error(msg):
-            yield {"kind": "auth", "service": service}
+            yield {"kind": "auth", "service": service, "service_full": service_full}
             yield {"kind": "compact", "text": f"O usuário ainda não conectou a conta Google ({service}). "
                    "Peça para conectar e siga com o que for possível."}
         else:
@@ -276,7 +289,7 @@ async def _run_google_tool(user, settings, graph, conversation_id, turn, service
     if getattr(res, "is_error", False):
         body = text_content(res)
         if _looks_like_auth_error(body):
-            yield {"kind": "auth", "service": service}
+            yield {"kind": "auth", "service": service, "service_full": service_full}
         yield {"kind": "compact", "text": f"{tool_name}: {body[:300]}"}
         return
 
@@ -333,7 +346,8 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
     tools = [GENIE_TOOL] + (registry.openai_tools if registry else [])
     for svc, err in (registry.failed_services if registry else {}).items():
         if _looks_like_auth_error(err):
-            yield sse("auth_required", service=svc.split(".")[-1], login_url=f"{settings.host_url}/explore/connections")
+            yield sse("auth_required", service=svc.split(".")[-1],
+                      login_url=_mcp_consent_url(settings.host_url, svc))
 
     working = [{"role": "system", "content": SYSTEM_PROMPT}]
     working += [{"role": m.role, "content": m.content} for m in history]
@@ -407,7 +421,9 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                                                        service, name, registry.service_url[name], args):
                         if out["kind"] == "auth":
                             yield sse("auth_required", service=out["service"],
-                                      login_url=f"{settings.host_url}/explore/connections")
+                                      login_url=_mcp_consent_url(
+                                          settings.host_url,
+                                          out.get("service_full") or f"system.ai.{out['service']}"))
                         elif out["kind"] == "graph":
                             yield sse("graph_delta", **out["delta"])
                         elif out["kind"] == "compact":
