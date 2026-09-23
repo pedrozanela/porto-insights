@@ -629,23 +629,48 @@ def ensure_app_deployment(app_name: str, source_path: str) -> dict[str, Any]:
     fail("Timeout esperando o deployment do App.")
 
 
-def start_app_and_wait(app_name: str, timeout_s: int = 900) -> dict[str, Any]:
+def ensure_app_compute_active(app_name: str, timeout_s: int = 1200) -> dict[str, Any]:
+    """Sobe o compute do App e espera ficar ACTIVE. Precisa acontecer ANTES do deployment:
+    a API recusa deploy num app que não está RUNNING."""
     encoded = urllib.parse.quote(app_name, safe="")
-    try:
-        dbx_api("POST", f"/api/2.0/apps/{encoded}/start", {})
-    except DbxApiError as err:
-        if err.status not in {400, 409}:  # já rodando / em transição
-            raise
     deadline = time.time() + timeout_s
+    start_requested = False
+    last: dict[str, Any] = {}
     while time.time() < deadline:
         meta = dbx_api("GET", f"/api/2.0/apps/{encoded}")
-        state = (meta.get("compute_status") or {}).get("state")
+        compute = meta.get("compute_status", {})
+        state = compute.get("state")
+        last = compute
         if state == "ACTIVE":
+            print(f"Compute do App ativo: {app_name}")
             return meta
-        if state in {"ERROR", "STOPPED"}:
-            fail(f"O compute do App entrou em {state}.")
-        time.sleep(10)
-    fail("Timeout esperando o compute do App ficar ACTIVE.")
+        if state == "ERROR":
+            fail(f"O compute do App falhou ao subir: {json.dumps(compute, indent=2)}")
+        if state in {"STOPPED", None} and not start_requested:
+            print(f"Iniciando o compute do App antes do deployment: {app_name}")
+            try:
+                dbx_api("POST", f"/api/2.0/apps/{encoded}/start", {})
+            except DbxApiError as err:
+                body = err.body.lower()
+                transient = err.status in {400, 409} and any(
+                    m in body for m in ("already", "in progress", "starting", "active", "running")
+                )
+                if not transient:
+                    raise
+                print(f"Start já em andamento: {err.body[:200]}")
+            start_requested = True
+        time.sleep(8)
+    fail(f"Timeout esperando o compute do App ficar ACTIVE.\n{json.dumps(last, indent=2)}")
+
+
+def stop_app_compute(app_name: str) -> None:
+    encoded = urllib.parse.quote(app_name, safe="")
+    try:
+        dbx_api("POST", f"/api/2.0/apps/{encoded}/stop", {})
+        print(f"Compute do App parado (run_app=false): {app_name}")
+    except DbxApiError as err:
+        if err.status not in {400, 409}:
+            raise
 
 
 def smoke_test(app_url: str) -> None:
@@ -683,15 +708,16 @@ def main() -> None:
     source_path = publish_source(work, CONFIG.app_name)
 
     meta = ensure_app(CONFIG, warehouse_id, branch_name, database_name)
+    # O compute precisa estar ACTIVE ANTES do deployment (a API recusa deploy fora de RUNNING).
+    meta = ensure_app_compute_active(CONFIG.app_name)
     ensure_app_deployment(CONFIG.app_name, source_path)
 
     app_url = meta.get("url") or dbx_api("GET", f"/api/2.0/apps/{urllib.parse.quote(CONFIG.app_name, safe='')}").get("url", "")
 
-    if CONFIG.run_app:
-        meta = start_app_and_wait(CONFIG.app_name)
-        app_url = meta.get("url") or app_url
-        if CONFIG.smoke_test and app_url:
-            smoke_test(app_url)
+    if CONFIG.smoke_test and app_url:
+        smoke_test(app_url)
+    if not CONFIG.run_app:
+        stop_app_compute(CONFIG.app_name)
 
     print("=" * 72)
     print("Deploy concluído.")
