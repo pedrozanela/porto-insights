@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     agent_max_tool_iterations: int = 14
     semantic_linker_min_confidence: float = 0.6
     time_window_days: int = 3
+    # Modelo do linker semântico (extração de relações em JSON). Vazio = usa o modelo da conversa;
+    # um modelo mais rápido/barato (Haiku) corta latência sem perder qualidade nessa tarefa mecânica.
+    linker_model: str = Field(default="", alias="LINKER_MODEL")
 
     # Observabilidade
     mlflow_experiment_path: str = ""

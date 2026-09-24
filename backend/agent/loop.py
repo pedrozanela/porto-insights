@@ -524,8 +524,8 @@ async def _run_turn_impl(user, settings, store, graph, conversation_id, user_mes
             # para o fechamento estrutural e o invariante sem-órfãos verem todas as arestas.
             _l0 = time.monotonic()
             sem_nodes, sem_edges, relevant_ids = await semantic_links(
-                client, model, state, turn, settings.semantic_linker_min_confidence,
-                answer_text=final_answer)
+                client, settings.linker_model or model, state, turn,
+                settings.semantic_linker_min_confidence, answer_text=final_answer)
             linker_ms += (time.monotonic() - _l0) * 1000
             deterministic_links(state, turn, settings.time_window_days)
             # Promoção por evidência (semente + fechamento estrutural + colapso + anexos).

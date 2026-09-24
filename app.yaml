@@ -28,6 +28,8 @@ env:
     value: "14"
   - name: SEMANTIC_LINKER_MIN_CONFIDENCE
     value: "0.6"
+  - name: LINKER_MODEL
+    value: "databricks-claude-haiku-4-5"
   - name: TIME_WINDOW_DAYS
     value: "3"
   - name: LOG_LEVEL
