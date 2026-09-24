@@ -32,3 +32,7 @@ env:
     value: "3"
   - name: LOG_LEVEL
     value: INFO
+  # MLflow Tracing (observabilidade por turno). Vazio = desligado. Aqui aponta pro experimento
+  # do FEVM (o SP do app tem CAN_EDIT). Em outro workspace, use um experimento com acesso restrito.
+  - name: MLFLOW_EXPERIMENT_PATH
+    value: "/Users/pedro.zanela@databricks.com/porto-insights-traces"

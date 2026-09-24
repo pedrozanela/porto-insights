@@ -34,7 +34,7 @@ from ..mcp.client import mcp_session, structured, text_content
 from ..mcp.registry import get_registry
 from ..sse import sse
 from ..store.base import ConversationStore
-from ..tracing import trace_turn
+from .. import tracing
 from .prompts import SYSTEM_PROMPT
 
 logger = logging.getLogger("porto_insights.agent")
@@ -342,6 +342,17 @@ async def _run_google_tool(user, settings, graph, conversation_id, turn, service
 
 
 async def run_turn(user, settings, store, graph, conversation_id, user_message, requested_model) -> AsyncIterator[str]:
+    """Wrapper fino: abre o span raiz do turno (MLflow, best-effort) e delega. O span fica ativo
+    durante toda a geração, então os spans de LLM (autolog) e de tools aninham por contexto."""
+    model, _ = _resolve_model(settings, requested_model)
+    with tracing.turn_span(question=(user_message or "").strip(), model=model,
+                           conversation_id=conversation_id, user_email=user.email):
+        async for ev in _run_turn_impl(user, settings, store, graph, conversation_id,
+                                       user_message, requested_model):
+            yield ev
+
+
+async def _run_turn_impl(user, settings, store, graph, conversation_id, user_message, requested_model) -> AsyncIterator[str]:
     user_message = (user_message or "").strip()
     if not user_message:
         yield sse("error", message="Mensagem vazia.")
@@ -422,16 +433,17 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                               args={"question": question})
                     compact = "Sem resultado."
                     _g0 = time.monotonic()
-                    async for out in _run_genie_tool(user, settings, store, graph, conversation_id,
-                                                      turn, question, bool(args.get("follow_up"))):
-                        if out["kind"] == "progress":
-                            yield sse("tool_progress", tool="genie__ask", step=out["step"])
-                        elif out["kind"] == "card":
-                            yield sse("tool_call_result", tool="genie__ask", card=out["card"])
-                        elif out["kind"] == "graph":
-                            yield sse("graph_delta", **out["delta"])
-                        elif out["kind"] == "compact":
-                            compact = out["text"]
+                    with tracing.tool_span("genie__ask", inputs={"question": question}):
+                        async for out in _run_genie_tool(user, settings, store, graph, conversation_id,
+                                                          turn, question, bool(args.get("follow_up"))):
+                            if out["kind"] == "progress":
+                                yield sse("tool_progress", tool="genie__ask", step=out["step"])
+                            elif out["kind"] == "card":
+                                yield sse("tool_call_result", tool="genie__ask", card=out["card"])
+                            elif out["kind"] == "graph":
+                                yield sse("graph_delta", **out["delta"])
+                            elif out["kind"] == "compact":
+                                compact = out["text"]
                     genie_ms += (time.monotonic() - _g0) * 1000
                     working.append({"role": "tool", "tool_call_id": tc["id"], "content": compact})
 
@@ -442,17 +454,18 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
                              "web": "Pesquisando na web…"}.get(service, "Consultando…")
                     yield sse("tool_call_start", tool=name, label=label, args=args)
                     compact = "Sem resultado."
-                    async for out in _run_google_tool(user, settings, graph, conversation_id, turn,
-                                                       service, name, registry.service_url[name], args):
-                        if out["kind"] == "auth":
-                            yield sse("auth_required", service=out["service"],
-                                      login_url=_mcp_consent_url(
-                                          settings.host_url,
-                                          out.get("service_full") or f"system.ai.{out['service']}"))
-                        elif out["kind"] == "graph":
-                            yield sse("graph_delta", **out["delta"])
-                        elif out["kind"] == "compact":
-                            compact = out["text"]
+                    with tracing.tool_span(name, inputs=args):
+                        async for out in _run_google_tool(user, settings, graph, conversation_id, turn,
+                                                           service, name, registry.service_url[name], args):
+                            if out["kind"] == "auth":
+                                yield sse("auth_required", service=out["service"],
+                                          login_url=_mcp_consent_url(
+                                              settings.host_url,
+                                              out.get("service_full") or f"system.ai.{out['service']}"))
+                            elif out["kind"] == "graph":
+                                yield sse("graph_delta", **out["delta"])
+                            elif out["kind"] == "compact":
+                                compact = out["text"]
                     yield sse("tool_call_result", tool=name)
                     working.append({"role": "tool", "tool_call_id": tc["id"], "content": compact})
                 else:
@@ -540,10 +553,10 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
 
     graph_nodes = len([n for n in graph.get(user.email, conversation_id).nodes.values()
                        if is_visible(n) and not n.props.get("is_self")])
-    trace_turn(model=model, question=user_message, tool_calls=tool_call_count, graph_nodes=graph_nodes)
     # Latência (item 3): total, nº de tool calls, tempo do Genie e do linker deste turno.
     total_ms = round((time.monotonic() - turn_t0) * 1000)
     timing = {"total_ms": total_ms, "tool_calls": tool_call_count,
               "genie_ms": round(genie_ms), "linker_ms": round(linker_ms)}
+    tracing.set_turn_metrics(graph_nodes=graph_nodes, timing=timing)  # anota no span raiz (MLflow)
     logger.info("turn timing model=%s %s", model, timing)
     yield sse("done", conversation_id=conversation_id, model=model, timing=timing)
