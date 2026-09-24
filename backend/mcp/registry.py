@@ -9,6 +9,7 @@ google_file_read), então não re-prefixamos; o `service_of` cobre a atribuiçã
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -54,16 +55,25 @@ async def build_registry(
     extra_deny = extra_deny or set()
     reg = ToolRegistry()
 
-    for svc in services:
+    async def _fetch(svc: str):
         url = f"{host_url}/ai-gateway/mcp-services/{svc}"
         try:
-            async with mcp_session(url, token, timeout=30) as s:
-                tools = (await s.list_tools()).tools
+            async with mcp_session(url, token, timeout=12) as s:
+                return svc, url, (await s.list_tools()).tools, None
         except Exception as e:  # noqa: BLE001 — serviço sem login OAuth ou indisponível
-            logger.warning("tools/list falhou em %s: %s", svc, str(e)[:120])
-            reg.failed_services[svc] = str(e)[:200]
-            continue
+            return svc, url, None, str(e)[:200]
 
+    # Descoberta CONCORRENTE: a latência do 1º turno vira a do serviço mais lento, não a soma
+    # dos serviços (crítico quando o Google ainda não foi conectado → cada um ia até o timeout).
+    results = await asyncio.gather(*(_fetch(svc) for svc in services))
+    by_svc = {svc: (url, tools, err) for (svc, url, tools, err) in results}
+
+    for svc in services:  # monta em ordem determinística
+        url, tools, err = by_svc[svc]
+        if err is not None:
+            logger.warning("tools/list falhou em %s: %s", svc, err[:120])
+            reg.failed_services[svc] = err
+            continue
         for t in tools:
             if not allowed(t.name, t.description, extra_allow=extra_allow, extra_deny=extra_deny):
                 logger.info("tool bloqueada (allowlist read-only): %s", t.name)
