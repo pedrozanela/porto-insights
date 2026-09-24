@@ -51,3 +51,11 @@ class ConversationStore(ABC):
     @abstractmethod
     def set_genie_conversation_id(self, user_email: str, conversation_id: str, genie_id: str) -> None:
         ...
+
+    @abstractmethod
+    def save_graph(self, user_email: str, conversation_id: str, data: dict) -> None:
+        """Persiste o estado do grafo da conversa (JSON), para reexibir ao reabrir."""
+
+    @abstractmethod
+    def load_graph(self, user_email: str, conversation_id: str) -> dict | None:
+        """Carrega o grafo persistido, ou None se não houver."""

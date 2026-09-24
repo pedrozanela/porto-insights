@@ -563,6 +563,9 @@ async def _run_turn_impl(user, settings, store, graph, conversation_id, user_mes
             yield sse("graph_delta", **delta_payload(vis_nodes, vis_edges, turn,
                                                       removed_node_ids=removed, promoted_node_ids=newly))
 
+            # Persiste o grafo (best-effort) para reexibir ao reabrir a conversa (durável).
+            await anyio.to_thread.run_sync(graph.save, user.email, conversation_id)
+
             sugg = build_suggestions(state, asked=asked_questions)  # Bloco 5: só nós visíveis
             if sugg:
                 yield sse("suggestions", suggestions=sugg)

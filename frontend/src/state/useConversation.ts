@@ -2,7 +2,7 @@
 // streaming, troca de modelo e navegação entre conversas persistidas.
 import { useCallback, useRef, useState } from "react";
 import { streamChat, type SSEEvent } from "../api/sse";
-import { getConversation, promoteGraphNodes } from "../api/client";
+import { getConversation, promoteGraphNodes, fetchGraph } from "../api/client";
 import type { ChatMessage, GraphData, GraphNode, GraphEdge, GenieCard, Suggestion } from "./types";
 
 function newConversationId(): string {
@@ -193,7 +193,7 @@ export function useConversation() {
     setError(null);
     setStreaming(false);
     setConversationId(id);
-    setGraph(EMPTY_GRAPH); // o grafo é reconstruído conforme novas perguntas nesta sessão
+    setGraph(EMPTY_GRAPH);
     setSuggestions([]);
     try {
       const msgs = await getConversation(id);
@@ -202,6 +202,11 @@ export function useConversation() {
       setError(String(e));
       setMessages([]);
     }
+    // Restaura o grafo persistido (durável) — best-effort; sem grafo salvo, segue vazio.
+    try {
+      const g = await fetchGraph(id);
+      mergeGraph(g.added_nodes ?? [], g.added_edges ?? [], 0, [], []);
+    } catch { /* sem grafo salvo */ }
   }, []);
 
   // Promoção manual (ex.: participante colapsado escolhido no painel de detalhe).

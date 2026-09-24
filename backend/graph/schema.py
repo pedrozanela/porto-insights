@@ -74,6 +74,24 @@ class GraphState:
             if v == node_id:
                 del self.last_genie_answer[k]
 
+    def to_dict(self) -> dict:
+        """Serializa o estado para persistência (Lakebase). Guarda o grafo inteiro."""
+        return {
+            "nodes": [asdict(n) for n in self.nodes.values()],
+            "edges": [asdict(e) for e in self.edges.values()],
+            "last_genie_answer": dict(self.last_genie_answer),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GraphState":
+        st = cls()
+        for nd in data.get("nodes", []):
+            st.nodes[nd["id"]] = GraphNode(**nd)
+        for ed in data.get("edges", []):
+            st.edges[ed["id"]] = GraphEdge(**ed)
+        st.last_genie_answer = dict(data.get("last_genie_answer", {}))
+        return st
+
     def merge_node(self, from_id: str, to_id: str) -> tuple[list["GraphEdge"], str | None]:
         """Funde `from_id` em `to_id`: reaponta as arestas e remove o `from_id`.
         Retorna (arestas novas reapontadas, from_id removido) para o delta."""

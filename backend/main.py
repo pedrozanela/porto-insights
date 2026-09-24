@@ -52,7 +52,7 @@ def _build_store() -> ConversationStore:
 
 
 store = _build_store()
-graph_store = GraphStore()
+graph_store = GraphStore(persistence=store)  # grafo durável: persiste/restaura via o store
 
 
 class ChatRequest(BaseModel):
@@ -109,6 +109,18 @@ def promote_graph(req: PromoteRequest, user: UserContext = Depends(get_user_cont
     newly = promote_ids(state, req.node_ids)
     vis_nodes, vis_edges = visible_delta(state)
     return delta_payload(vis_nodes, vis_edges, turn=0, promoted_node_ids=list(newly))
+
+
+@app.get("/api/graph/{conversation_id}")
+def get_graph(conversation_id: str, user: UserContext = Depends(get_user_context)) -> dict:
+    """Grafo visível da conversa (nós + arestas), para reexibir ao reabrir do histórico.
+    graph_store.get carrega do Lakebase se não estiver em memória (durável)."""
+    from .graph.promotion import visible_delta
+    from .graph.schema import delta_payload
+
+    state = graph_store.get(user.email, conversation_id)
+    vis_nodes, vis_edges = visible_delta(state)
+    return delta_payload(vis_nodes, vis_edges, turn=0)
 
 
 @app.get("/api/debug/graph/{conversation_id}")

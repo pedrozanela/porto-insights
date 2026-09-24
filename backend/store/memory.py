@@ -16,6 +16,7 @@ class _Conv:
     title: str = ""
     messages: list[Message] = field(default_factory=list)
     genie_conversation_id: str | None = None
+    graph: dict | None = None
     updated_at: float = field(default_factory=time.time)
 
 
@@ -72,3 +73,14 @@ class InMemoryConversationStore(ConversationStore):
         with self._lock:
             conv = self._data.setdefault((user_email, conversation_id), _Conv())
             conv.genie_conversation_id = genie_id
+
+    def save_graph(self, user_email: str, conversation_id: str, data: dict) -> None:
+        with self._lock:
+            conv = self._data.setdefault((user_email, conversation_id), _Conv())
+            conv.graph = data
+            conv.updated_at = time.time()
+
+    def load_graph(self, user_email: str, conversation_id: str) -> dict | None:
+        with self._lock:
+            conv = self._data.get((user_email, conversation_id))
+            return conv.graph if conv else None

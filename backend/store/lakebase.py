@@ -6,6 +6,7 @@ que o SP roda a inicialização (ou conceda grants ao SP). Ver docs/prerequisite
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from ..lakebase import LakebaseConnection
@@ -36,6 +37,13 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv
   ON {SCHEMA}.messages (user_email, conversation_id, id);
+CREATE TABLE IF NOT EXISTS {SCHEMA}.graphs (
+  user_email      TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  data            TEXT NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_email, conversation_id)
+);
 """
 
 
@@ -100,6 +108,8 @@ class LakebaseConversationStore(ConversationStore):
         with self._conn.connect() as c:
             c.execute(f"DELETE FROM {SCHEMA}.messages WHERE user_email=%s AND conversation_id=%s",
                       (user_email, conversation_id))
+            c.execute(f"DELETE FROM {SCHEMA}.graphs WHERE user_email=%s AND conversation_id=%s",
+                      (user_email, conversation_id))
             c.execute(f"DELETE FROM {SCHEMA}.conversations WHERE user_email=%s AND conversation_id=%s",
                       (user_email, conversation_id))
 
@@ -121,3 +131,22 @@ class LakebaseConversationStore(ConversationStore):
                     SET genie_conversation_id = EXCLUDED.genie_conversation_id""",
                 (user_email, conversation_id, genie_id),
             )
+
+    def save_graph(self, user_email: str, conversation_id: str, data: dict) -> None:
+        with self._conn.connect() as c:
+            c.execute(
+                f"""INSERT INTO {SCHEMA}.graphs (user_email, conversation_id, data, updated_at)
+                    VALUES (%s, %s, %s, now())
+                    ON CONFLICT (user_email, conversation_id) DO UPDATE
+                    SET data = EXCLUDED.data, updated_at = now()""",
+                (user_email, conversation_id, json.dumps(data, ensure_ascii=False)),
+            )
+
+    def load_graph(self, user_email: str, conversation_id: str) -> dict | None:
+        with self._conn.connect() as c:
+            row = c.execute(
+                f"""SELECT data FROM {SCHEMA}.graphs
+                    WHERE user_email=%s AND conversation_id=%s""",
+                (user_email, conversation_id),
+            ).fetchone()
+        return json.loads(row[0]) if row and row[0] else None

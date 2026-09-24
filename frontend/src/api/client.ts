@@ -84,3 +84,10 @@ export async function promoteGraphNodes(conversationId: string, nodeIds: string[
   if (!res.ok) throw new Error(`promote falhou: ${res.status}`);
   return res.json();
 }
+
+// Grafo persistido da conversa (para reexibir ao abrir do histórico). Mesmo shape do delta.
+export async function fetchGraph(conversationId: string): Promise<any> {
+  const res = await fetch(`/api/graph/${encodeURIComponent(conversationId)}`);
+  if (!res.ok) throw new Error(`GET /api/graph falhou: ${res.status}`);
+  return res.json();
+}
