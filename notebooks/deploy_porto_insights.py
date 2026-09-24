@@ -63,7 +63,8 @@ DEFAULTS = {
     "lakebase_min_cu": "0.5",
     "lakebase_max_cu": "1.0",
     "lakebase_scale_to_zero_seconds": "300",
-    "enable_web_search": "true",
+    "enable_web_search": "false",  # system.ai.web_search só existe em AWS/GCP (não Azure)
+    "mlflow_experiment_path": "",  # vazio = tracing desligado; informe um experimento p/ ligar
     "run_app": "true",
     "smoke_test": "true",
 }
@@ -79,7 +80,8 @@ WIDGET_LABELS = {
     "lakebase_min_cu": "Lakebase — compute mínimo (CU)",
     "lakebase_max_cu": "Lakebase — compute máximo (CU)",
     "lakebase_scale_to_zero_seconds": "Lakebase — segundos ociosos até escalar a zero",
-    "enable_web_search": "Habilitar busca na web (system.ai.web_search)",
+    "enable_web_search": "Habilitar busca na web (só AWS/GCP; indisponível na Azure)",
+    "mlflow_experiment_path": "MLflow: caminho do experimento p/ traces (vazio = desligado)",
     "run_app": "Iniciar o app após o deploy",
     "smoke_test": "Testar as rotas após o deploy",
 }
@@ -153,6 +155,7 @@ class DeployConfig:
     lakebase_max_cu: float
     lakebase_scale_to_zero_seconds: int
     enable_web_search: bool
+    mlflow_experiment_path: str
     run_app: bool
     smoke_test: bool
 
@@ -169,6 +172,7 @@ CONFIG = DeployConfig(
     lakebase_max_cu=as_float(widget("lakebase_max_cu"), "lakebase_max_cu"),
     lakebase_scale_to_zero_seconds=as_int(widget("lakebase_scale_to_zero_seconds"), "lakebase_scale_to_zero_seconds"),
     enable_web_search=as_bool(widget("enable_web_search")),
+    mlflow_experiment_path=widget("mlflow_experiment_path") if widget("mlflow_experiment_path") != DEFAULTS["mlflow_experiment_path"] else "",
     run_app=as_bool(widget("run_app")),
     smoke_test=as_bool(widget("smoke_test")),
 )
@@ -412,6 +416,9 @@ def stage_source(repo_root: Path, cfg: DeployConfig, warehouse_id: str) -> Path:
         "MODEL_ENDPOINTS": cfg.model_endpoints,
         "DEFAULT_MODEL_ENDPOINT": cfg.default_model_endpoint,
         "MCP_WEB_SEARCH_ENABLED": "true" if cfg.enable_web_search else "false",
+        # O notebook é dono de TODA a config específica de workspace: zera a observabilidade
+        # (o path do experimento no repo é do ambiente de dev; tracing é opt-in por workspace).
+        "MLFLOW_EXPERIMENT_PATH": cfg.mlflow_experiment_path,
     })
     (work / "app.yaml").write_text(app_yaml, encoding="utf-8")
     print(f"Código preparado em: {work}")
