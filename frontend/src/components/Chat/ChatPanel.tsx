@@ -18,9 +18,10 @@ interface Props {
   error: string | null;
   suggestions: Suggestion[];
   onSend: (text: string) => void;
+  onStop?: () => void;
 }
 
-export function ChatPanel({ messages, streaming, warning, error, suggestions, onSend }: Props) {
+export function ChatPanel({ messages, streaming, warning, error, suggestions, onSend, onStop }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -75,7 +76,7 @@ export function ChatPanel({ messages, streaming, warning, error, suggestions, on
           ))}
         </div>
       )}
-      <Composer onSend={onSend} disabled={streaming} />
+      <Composer onSend={onSend} onStop={onStop} streaming={streaming} />
     </div>
   );
 }

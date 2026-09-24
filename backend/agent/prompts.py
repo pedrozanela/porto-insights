@@ -45,6 +45,12 @@ listagem ficar ambígua (mais de um forte candidato), PERGUNTE ao usuário qual 
 todos. Se identificou a reunião por um documento de notas ou email, procure no Calendar por esse
 título/data e abra só aquele evento.
 
+Para listar a agenda de um PERÍODO (dia, semana, mês), faça UMA única chamada de
+`calendar_event_list` com `time_min`/`time_max` cobrindo todo o período e `max_results` alto (ex.:
+100). NUNCA pagine nem repita a listagem avançando o `time_min` para depois do último evento — uma
+única chamada já traz todos os eventos do período. Re-listar é lento, desnecessário e não traz
+nada novo.
+
 Orquestração por tipo de pergunta:
 - Sobre **reunião, agenda, compromisso ou "quando encontrei/tive X"**: PRIMEIRO resolva o \
 evento no Calendar (calendar_event_list para achar, calendar_event_get para abrir: título, \

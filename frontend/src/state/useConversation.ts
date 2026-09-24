@@ -151,7 +151,16 @@ export function useConversation() {
           abort.signal,
         );
       } catch (err) {
-        setError(String(err));
+        if (abort.signal.aborted) {
+          // Interrompido pelo usuário (botão Parar): mantém o parcial, marca e fecha o trace.
+          patchLastAssistant((m) => ({
+            ...m,
+            content: (m.content ? m.content + "\n\n" : "") + "_(resposta interrompida)_",
+            trace: m.trace ? { ...m.trace, done: true } : m.trace,
+          }));
+        } else {
+          setError(String(err));
+        }
       } finally {
         setStreaming(false);
         abortRef.current = null;
@@ -160,6 +169,12 @@ export function useConversation() {
     },
     [streaming, conversationId],
   );
+
+  // Botão Parar: aborta o stream do turno atual. O catch/finally do send cuida do resto.
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    setStreaming(false);
+  }, []);
 
   const startNew = useCallback(() => {
     abortRef.current?.abort();
@@ -199,6 +214,6 @@ export function useConversation() {
 
   return {
     messages, graph, suggestions, conversationId, streaming, warning, error, changeToken,
-    send, startNew, open, promoteNodes,
+    send, stop, startNew, open, promoteNodes,
   };
 }

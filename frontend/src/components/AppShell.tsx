@@ -78,6 +78,7 @@ export function AppShell() {
             error={conv.error}
             suggestions={conv.suggestions}
             onSend={(text) => conv.send(text, selectedModel)}
+            onStop={conv.stop}
           />
         </section>
         <div onMouseDown={startDrag} title="Arraste para redimensionar"

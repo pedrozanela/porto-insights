@@ -41,6 +41,15 @@ logger = logging.getLogger("porto_insights.agent")
 
 AUTH_HINTS = ("login", "authoriz", "authentic", "oauth", "consent", "unauthenticated", "not connected")
 
+# Backstop de latência: o modelo às vezes "pagina" uma listagem (ex.: chama calendar_event_list
+# 10x avançando o time_min) mesmo instruído a não fazer. Capamos chamadas repetidas da MESMA
+# tool de listagem/busca por turno; além do teto, devolvemos um aviso em vez de executar.
+LISTING_TOOLS = frozenset({
+    "calendar_event_list", "google_drive_search", "google_drive_list_recent",
+    "gmail_search", "gmail_search_threads",
+})
+LISTING_CAP_PER_TURN = 3
+
 # Brasil não tem horário de verão desde 2019 → offset fixo UTC-3 (sem dependência de tzdata).
 _BR_TZ = timezone(timedelta(hours=-3))
 _WEEKDAYS = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira",
@@ -396,6 +405,7 @@ async def _run_turn_impl(user, settings, store, graph, conversation_id, user_mes
     turn_t0 = time.monotonic()  # latência (item 3): total, Genie, linker
     genie_ms = 0.0
     linker_ms = 0.0
+    listing_calls: dict[str, int] = {}  # backstop anti-paginação (por tool, por turno)
 
     try:
         for _iteration in range(settings.agent_max_tool_iterations):
@@ -449,6 +459,15 @@ async def _run_turn_impl(user, settings, store, graph, conversation_id, user_mes
 
                 elif registry and name in registry.service_url:
                     service = registry.service_of(name)
+                    # Backstop anti-paginação: além do teto, não executa — devolve aviso ao modelo.
+                    if name in LISTING_TOOLS:
+                        listing_calls[name] = listing_calls.get(name, 0) + 1
+                        if listing_calls[name] > LISTING_CAP_PER_TURN:
+                            working.append({"role": "tool", "tool_call_id": tc["id"], "content": (
+                                f"Você já chamou `{name}` {LISTING_CAP_PER_TURN} vezes neste turno. "
+                                "NÃO liste de novo: uma listagem do período já traz todos os itens. "
+                                "Use os resultados anteriores para responder agora.")})
+                            continue
                     label = {"gmail": "Buscando emails…", "calendar": "Consultando sua agenda…",
                              "drive": "Procurando documentos…",
                              "web": "Pesquisando na web…"}.get(service, "Consultando…")
