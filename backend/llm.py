@@ -41,7 +41,7 @@ async def stream_turn(
     messages: list[dict],
     tools: list[dict] | None = None,
     *,
-    max_tokens: int = 1500,
+    max_tokens: int = 4000,
 ) -> AsyncIterator[dict[str, Any]]:
     """Streama uma chamada ao modelo. Emite {"type":"token","text":...} durante e, ao final,
     {"type":"complete","content":str,"tool_calls":[...]} (tool_calls no formato OpenAI)."""
@@ -55,10 +55,13 @@ async def stream_turn(
     content_parts: list[str] = []
     # acumula tool_calls por índice (chegam fragmentados no streaming)
     tool_acc: dict[int, dict[str, Any]] = {}
+    finish_reason: str | None = None
 
     async for chunk in stream:
         if not chunk.choices:
             continue
+        if chunk.choices[0].finish_reason:
+            finish_reason = chunk.choices[0].finish_reason
         delta = chunk.choices[0].delta
         text = _delta_text(getattr(delta, "content", None)) if delta else ""
         if text:
@@ -78,4 +81,7 @@ async def stream_turn(
          "function": {"name": a["name"], "arguments": a["arguments"]}}
         for _, a in sorted(tool_acc.items())
     ]
-    yield {"type": "complete", "content": "".join(content_parts), "tool_calls": tool_calls}
+    if finish_reason == "length":
+        logger.warning("resposta truncada por max_tokens=%d (finish_reason=length)", max_tokens)
+    yield {"type": "complete", "content": "".join(content_parts), "tool_calls": tool_calls,
+           "finish_reason": finish_reason}
