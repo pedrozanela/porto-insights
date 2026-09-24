@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 import anyio
@@ -39,6 +40,30 @@ from .prompts import SYSTEM_PROMPT
 logger = logging.getLogger("porto_insights.agent")
 
 AUTH_HINTS = ("login", "authoriz", "authentic", "oauth", "consent", "unauthenticated", "not connected")
+
+# Brasil não tem horário de verão desde 2019 → offset fixo UTC-3 (sem dependência de tzdata).
+_BR_TZ = timezone(timedelta(hours=-3))
+_WEEKDAYS = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira",
+             "sábado", "domingo")
+_MONTHS = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+           "setembro", "outubro", "novembro", "dezembro")
+
+
+def _today_preamble() -> str:
+    """Âncora temporal injetada no system prompt a cada turno. Sem isto, o modelo não sabe
+    que dia é hoje e calcula 'esta semana'/'amanhã' errado (ex.: cai em outro mês/ano)."""
+    now = datetime.now(timezone.utc).astimezone(_BR_TZ)
+    monday = now - timedelta(days=now.weekday())
+    sunday = monday + timedelta(days=6)
+    d = lambda x: f"{x.day:02d}/{x.month:02d}/{x.year}"  # noqa: E731
+    return (
+        "Contexto temporal (use como referência para QUALQUER filtro de data — agenda, emails e "
+        f"documentos): hoje é {_WEEKDAYS[now.weekday()]}, {now.day} de {_MONTHS[now.month - 1]} de "
+        f"{now.year}, {now:%H:%M} (horário de Brasília). A semana atual (segunda a domingo) vai de "
+        f"{d(monday)} a {d(sunday)}. \"Esta semana\" = esse intervalo; \"hoje\" = {d(now)}. "
+        "Calcule TODAS as datas a partir de HOJE; NUNCA use outro ano ou mês por conta própria e "
+        "nunca deduza a data a partir de eventos antigos que aparecerem nas buscas."
+    )
 
 
 def _resolve_model(settings: Settings, requested: str) -> tuple[str, str | None]:
@@ -349,7 +374,7 @@ async def run_turn(user, settings, store, graph, conversation_id, user_message, 
             yield sse("auth_required", service=svc.split(".")[-1],
                       login_url=_mcp_consent_url(settings.host_url, svc))
 
-    working = [{"role": "system", "content": SYSTEM_PROMPT}]
+    working = [{"role": "system", "content": SYSTEM_PROMPT + "\n\n" + _today_preamble()}]
     working += [{"role": m.role, "content": m.content} for m in history]
     working.append({"role": "user", "content": user_message})
 
