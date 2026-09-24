@@ -3,10 +3,12 @@ import type { ChatMessage, Suggestion } from "../../state/types";
 import { Message } from "./Message";
 import { Composer } from "./Composer";
 
+// Exemplos agnósticos de domínio: mostram o que o app FAZ (agenda + email + documentos +
+// dados + grafo), sem presumir assunto — os temas de dados variam conforme o Genie do banco.
 const SUGGESTIONS = [
-  "Qual é a reunião do Comitê de Crédito PJ amanhã e quem participa?",
-  "Tem algum email relacionado ao Comitê de Crédito PJ?",
-  "Como está a carteira de Capital de Giro PJ neste mês em relação à meta?",
+  "O que tenho na agenda esta semana?",
+  "Resuma minha próxima reunião e traga documentos e emails relacionados.",
+  "Quais são os principais indicadores de negócio deste mês?",
 ];
 
 interface Props {

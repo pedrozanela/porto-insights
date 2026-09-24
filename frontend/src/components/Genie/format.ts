@@ -11,21 +11,23 @@ const nf0 = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 });
 const nf1 = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const nf2 = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Rótulos pt-BR para as colunas conhecidas do schema sintético; fallback = Title Case.
+// Rótulos pt-BR para nomes de coluna genéricos e comuns; fallback = Title Case.
+// Sem termos de domínio específico — os dados do banco variam de assunto.
 const HEADER_MAP: Record<string, string> = {
   competencia: "Competência",
-  produto_id: "Produto",
-  produto: "Produto",
-  segmento: "Segmento",
-  saldo_carteira: "Saldo da carteira",
-  novas_originacoes: "Novas originações",
-  inadimplencia_90d_percentual: "Inadimplência 90d",
-  quantidade_contratos: "Contratos",
-  meta_originacao: "Meta de originação",
-  meta_inadimplencia_maxima: "Teto de inadimplência",
+  periodo: "Período",
+  mes: "Mês",
+  data: "Data",
   nome: "Nome",
-  linha: "Linha",
-  publico: "Público",
+  categoria: "Categoria",
+  segmento: "Segmento",
+  produto: "Produto",
+  produto_id: "Produto",
+  regiao: "Região",
+  uf: "UF",
+  valor: "Valor",
+  total: "Total",
+  quantidade: "Quantidade",
 };
 
 export function toNumber(v: unknown): number | null {
@@ -50,10 +52,12 @@ export function classify(name: string, type: string | undefined, sample: unknown
   if (!isNum) return "text";
 
   if (/_id$/.test(nm)) return "text";                                   // ids não são grandezas
-  if (/inadimpl|percentual|_pct$|(^|_)teto/.test(nm)) return "percent";
+  // Genérico e agnóstico de domínio. Percentual e moeda só quando o nome sinaliza claramente;
+  // caso contrário, número simples (evita rotular errado grandezas de outros assuntos).
+  if (/percent|_pct$|(^|_)pct(_|$)|taxa|[íi]ndice|propor[çc]|%/.test(nm)) return "percent";
   if (/_mi$|_mm$|milh[oõ]/.test(nm)) return "currency_mi";
-  if (/orig|saldo|carteira|valor|desembolso|produ[çc]|receita|montante|meta_orig/.test(nm)) return "currency";
-  if (/qtd|quantidade|contratos|n[uú]mero/.test(nm)) return "int";
+  if (/valor|saldo|receita|custo|despesa|fatur|montante|pre[çc]o|pr[êe]mio|sinistro|desembolso|arrecad|ticket|gasto|r\$/.test(nm)) return "currency";
+  if (/qtd|quantidade|contagem|n[uú]mero/.test(nm)) return "int";
   return "num";
 }
 

@@ -16,10 +16,11 @@ GENIE_TOOL: dict[str, Any] = {
     "function": {
         "name": "genie__ask",
         "description": (
-            "Responde perguntas sobre os DADOS do Porto Bank (carteira de crédito, originação, "
-            "inadimplência, produtos, metas, contratos por UF/segmento/canal) consultando o Genie "
-            "One, que escreve e executa SQL sobre o Unity Catalog. Use sempre que a pergunta pedir "
-            "números, tendências ou fatos do negócio. Não invente dados — use esta ferramenta."
+            "Responde perguntas sobre os DADOS de negócio do banco — qualquer assunto ou área, "
+            "sem tema fixo — consultando o Genie One, que escreve e executa SQL sobre o Unity "
+            "Catalog. O Genie conhece as tabelas disponíveis; não é preciso saber os nomes de "
+            "antemão. Use sempre que a pergunta pedir números, métricas, tendências ou fatos do "
+            "negócio. Não invente dados — use esta ferramenta."
         ),
         "parameters": {
             "type": "object",

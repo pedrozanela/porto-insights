@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from .schema import GraphState
 
-DATA_TERMS = ("carteira", "inadimplência", "inadimplencia", "originação", "originacao",
-              "meta", "receita", "clientes", "contratos", "r$")
+# Sinais (agnósticos de domínio) de que um doc/email trata de dados/números de negócio.
+DATA_TERMS = ("meta", "resultado", "resultados", "indicador", "indicadores", "kpi", "número",
+              "numeros", "números", "valor", "receita", "custo", "orçamento", "orcamento",
+              "desempenho", "relatório", "relatorio", "dados", "r$", "%")
 
 
 def _adjacency(state: GraphState):
@@ -65,14 +67,12 @@ def build_suggestions(state: GraphState, asked: set[str] | None = None, limit: i
             add(f"Há documentos ligados a {n.label}?",
                 f"Há documentos no Drive ligados a {n.label}?", n.id)
 
-    # 3. doc/email com tema de dado, sem genie_answer
+    # 3. doc/email que parece tratar de dados de negócio, sem genie_answer
     for n in docs + emails:
         text = f"{n.label} {n.props.get('subject','')} {n.props.get('snippet','')}".lower()
         if not has(n.id, "genie_answer") and any(t in text for t in DATA_TERMS):
-            tema = next((t for t in ("carteira", "inadimplência", "originação", "meta", "receita",
-                                     "clientes", "contratos") if t in text), "esse tema")
-            add(f"Há dados no Genie sobre {tema}?",
-                f"O que os dados do Porto Bank mostram sobre {tema}?", n.id)
+            add(f"Há dados no Genie sobre {n.label}?",
+                f"O que os dados do banco mostram sobre {n.label}?", n.id)
 
     # 4. genie_answer sem evento
     for g in genies:
