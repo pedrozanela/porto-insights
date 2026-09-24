@@ -52,40 +52,39 @@ def _redact(value: Any) -> Any:
     return value
 
 
+def _pii_filter(span) -> None:
+    """Span processor (API mlflow.tracing.configure): redige PII de inputs/outputs antes do export."""
+    try:
+        if span.inputs:
+            span.set_inputs(_redact(span.inputs))
+        if span.outputs:
+            span.set_outputs(_redact(span.outputs))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def init_tracing(experiment_path: str) -> None:
     global _enabled
     if not experiment_path:
         return
     try:
         import mlflow
-        from mlflow.tracing.processor import SpanProcessor
 
         mlflow.set_tracking_uri("databricks")
         mlflow.set_experiment(experiment_path)
         mlflow.openai.autolog()  # traça o AsyncOpenAI (turnos do modelo + linker semântico)
-
-        class _PIIRedaction(SpanProcessor):  # redige PII antes de persistir
-            def on_start(self, span, parent_context=None):
-                pass
-
-            def on_end(self, span):
-                try:
-                    if getattr(span, "inputs", None):
-                        span._inputs = _redact(span.inputs)
-                    if getattr(span, "outputs", None):
-                        span._outputs = _redact(span.outputs)
-                except Exception:  # noqa: BLE001
-                    pass
-
-        try:
-            mlflow.tracing.add_span_processor(_PIIRedaction())
-        except Exception:  # noqa: BLE001 — versão sem API de processor: segue sem redação
-            logger.warning("SpanProcessor de PII indisponível nesta versão do MLflow")
-
         _enabled = True
         logger.info("MLflow tracing habilitado em %s", experiment_path)
     except Exception:  # noqa: BLE001
         logger.warning("MLflow indisponível — tracing desligado", exc_info=True)
+        return
+
+    # Redação de PII — separada, pra NUNCA derrubar o tracing se a API mudar de versão.
+    try:
+        import mlflow
+        mlflow.tracing.configure(span_processors=[_pii_filter])
+    except Exception:  # noqa: BLE001
+        logger.warning("redação de PII indisponível nesta versão do MLflow — tracing segue ligado")
 
 
 def is_enabled() -> bool:
