@@ -40,8 +40,9 @@ porto-insights/
   backend/    main.py config.py auth.py llm.py tracing.py lakebase.py
               mcp/  genie/  graph/  store/  agent/  tests/
   frontend/   src/ (components, state, api, theme)
-  scripts/    discover, seed_data, create_metric_views, publish_workspace_instructions,
-              create_genie_agent, validate_genie_one, build_frontend, deploy
+  scripts/    discover, publish_workspace_instructions, build_frontend, deploy, run_graph_golden
+    sample-fevm/  SEED do demo do FEVM (dados sintéticos de crédito) — NÃO é parte do produto:
+                  seed_data, create_metric_views(.sql), create_genie_agent, validate_genie_one, _sql
   docs/       discovery, prerequisites-checklist, demo-script, demo-seed-google
 ```
 
@@ -61,11 +62,14 @@ python -m venv .venv && ./.venv/bin/pip install -r requirements.txt faker
 export DATABRICKS_CONFIG_PROFILE=fevm-pzanela-classic-aws
 
 ./.venv/bin/python scripts/discover.py                       # valida endpoints, warehouse, MCP
-./.venv/bin/python scripts/seed_data.py --drop               # dados sintéticos
-./.venv/bin/python scripts/create_metric_views.py            # metric views governadas
-./.venv/bin/python scripts/publish_workspace_instructions.py # instruções do Genie One
-CREATE_SUPPORT_GENIE_AGENT=true ./.venv/bin/python scripts/create_genie_agent.py
-./.venv/bin/python scripts/validate_genie_one.py --runs 2 --md docs/discovery_genie.md
+./.venv/bin/python scripts/publish_workspace_instructions.py # instruções do Genie One (template)
+
+# Seed do DEMO do FEVM (dados sintéticos de crédito) — só para reproduzir a demonstração.
+# Um banco real usa o próprio Genie Space com seus dados; NÃO precisa rodar isto.
+./.venv/bin/python scripts/sample-fevm/seed_data.py --drop            # dados sintéticos
+./.venv/bin/python scripts/sample-fevm/create_metric_views.py         # metric views governadas
+CREATE_SUPPORT_GENIE_AGENT=true ./.venv/bin/python scripts/sample-fevm/create_genie_agent.py
+./.venv/bin/python scripts/sample-fevm/validate_genie_one.py --runs 2 --md docs/discovery_genie.md
 ```
 
 ## Rodar localmente
