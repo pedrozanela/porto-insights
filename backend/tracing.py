@@ -63,6 +63,19 @@ def _pii_filter(span) -> None:
         pass
 
 
+def _select_experiment(mlflow, value: str) -> None:
+    """Aceita o experimento como PATH (/Users/.../nome), ID numérico, ou a URL do Workspace
+    (…/ml/experiments/<id>…). set_experiment(name=...) só resolve o PATH; ID/URL viram experiment_id."""
+    value = value.strip()
+    m = re.search(r"/experiments/(\d+)", value)
+    if m:
+        mlflow.set_experiment(experiment_id=m.group(1))
+    elif value.isdigit():
+        mlflow.set_experiment(experiment_id=value)
+    else:
+        mlflow.set_experiment(value)
+
+
 def init_tracing(experiment_path: str) -> None:
     global _enabled
     if not experiment_path:
@@ -71,7 +84,7 @@ def init_tracing(experiment_path: str) -> None:
         import mlflow
 
         mlflow.set_tracking_uri("databricks")
-        mlflow.set_experiment(experiment_path)
+        _select_experiment(mlflow, experiment_path)
         mlflow.openai.autolog()  # traça o AsyncOpenAI (turnos do modelo + linker semântico)
         _enabled = True
         logger.info("MLflow tracing habilitado em %s", experiment_path)
