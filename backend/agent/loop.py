@@ -394,7 +394,13 @@ async def _run_turn_impl(user, settings, store, graph, conversation_id, user_mes
             yield sse("auth_required", service=svc.split(".")[-1],
                       login_url=_mcp_consent_url(settings.host_url, svc))
 
-    working = [{"role": "system", "content": SYSTEM_PROMPT + "\n\n" + _today_preamble()}]
+    # Cache de prompt: o prefixo ESTÁVEL (tools + SYSTEM_PROMPT) leva cache_control → é reusado
+    # entre turnos (5 min TTL). O preâmbulo de data (volátil: muda a cada minuto) fica DEPOIS do
+    # breakpoint, sem cache_control, pra não invalidar o prefixo cacheado.
+    working = [{"role": "system", "content": [
+        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": _today_preamble()},
+    ]}]
     working += [{"role": m.role, "content": m.content} for m in history]
     working.append({"role": "user", "content": user_message})
 

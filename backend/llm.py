@@ -42,10 +42,18 @@ async def stream_turn(
     tools: list[dict] | None = None,
     *,
     max_tokens: int = 4000,
+    effort: str = "low",
 ) -> AsyncIterator[dict[str, Any]]:
     """Streama uma chamada ao modelo. Emite {"type":"token","text":...} durante e, ao final,
-    {"type":"complete","content":str,"tool_calls":[...]} (tool_calls no formato OpenAI)."""
-    kwargs: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens, "stream": True}
+    {"type":"complete","content":str,"tool_calls":[...]} (tool_calls no formato OpenAI).
+
+    effort="low": reduz a profundidade do reasoning (menos tokens/latência) — adequado a um chat
+    executivo. Passado via output_config no corpo (a interface OpenAI-compat do Databricks aceita;
+    `reasoning_effort` NÃO é aceito). Cache de prompt: o chamador marca o prefixo estável
+    (tools + system) com cache_control; aqui só repassamos as mensagens."""
+    kwargs: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens,
+                              "stream": True, "extra_body": {"output_config": {"effort": effort}},
+                              "stream_options": {"include_usage": True}}
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
@@ -56,8 +64,11 @@ async def stream_turn(
     # acumula tool_calls por índice (chegam fragmentados no streaming)
     tool_acc: dict[int, dict[str, Any]] = {}
     finish_reason: str | None = None
+    usage = None
 
     async for chunk in stream:
+        if getattr(chunk, "usage", None):  # chunk final (include_usage) — sem choices
+            usage = chunk.usage
         if not chunk.choices:
             continue
         if chunk.choices[0].finish_reason:
@@ -83,5 +94,10 @@ async def stream_turn(
     ]
     if finish_reason == "length":
         logger.warning("resposta truncada por max_tokens=%d (finish_reason=length)", max_tokens)
+    if usage is not None:  # observabilidade do cache de prompt
+        cr = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cc = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        logger.info("llm usage in=%s out=%s cache_read=%s cache_create=%s",
+                    getattr(usage, "prompt_tokens", "?"), getattr(usage, "completion_tokens", "?"), cr, cc)
     yield {"type": "complete", "content": "".join(content_parts), "tool_calls": tool_calls,
            "finish_reason": finish_reason}

@@ -88,6 +88,9 @@ async def build_registry(
                     "parameters": t.input_schema or {"type": "object", "properties": {}},
                 },
             })
+    # Ordem determinística por nome: o blob de tools é byte-idêntico entre rebuilds do registry,
+    # então o prefixo (tools + system) do cache de prompt não é invalidado por reordenação.
+    reg.openai_tools.sort(key=lambda t: t["function"]["name"])
     return reg
 
 

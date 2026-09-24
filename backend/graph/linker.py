@@ -287,7 +287,8 @@ async def _call_linker(client, model: str, prompt: str) -> tuple[dict | None, st
     for mode, kwargs in (("json_object", {"response_format": {"type": "json_object"}}), ("plain", {})):
         try:
             resp = await client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}], max_tokens=1500, **kwargs)
+                model=model, messages=[{"role": "user", "content": prompt}], max_tokens=1500,
+                extra_body={"output_config": {"effort": "low"}}, **kwargs)  # extração JSON: reasoning baixo
             # content pode vir como str OU lista de blocos (Claude no Databricks) → _delta_text.
             content = _delta_text(resp.choices[0].message.content)
             frag = content[content.find("{"): content.rfind("}") + 1]
