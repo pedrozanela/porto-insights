@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # Auth das CHAMADAS DE MODELO: false = OBO (token do usuário); true = service principal do app
     # (M2M). Dados (Genie/Google) seguem SEMPRE OBO. Billing/auditoria/rate-limit passam ao SP.
     models_use_sp: bool = Field(default=False, alias="MODELS_USE_SP")
+    # Caminho base dos modelos. Unity Gateway (governança + system.ai_gateway.usage + policies):
+    # /ai-gateway/mlflow/v1 com nomes system.ai.*. Endpoint clássico direto: /serving-endpoints com
+    # nomes databricks-*. Os NOMES em MODEL_ENDPOINTS/DEFAULT/LINKER devem casar com o caminho.
+    model_serving_path: str = Field(default="/ai-gateway/mlflow/v1", alias="MODEL_SERVING_PATH")
 
     # Observabilidade
     mlflow_experiment_path: str = ""

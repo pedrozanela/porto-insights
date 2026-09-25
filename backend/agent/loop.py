@@ -405,8 +405,10 @@ async def _run_turn_impl(user, settings, store, graph, conversation_id, user_mes
     working.append({"role": "user", "content": user_message})
 
     # Modelos: OBO (token do usuário) por padrão; SP do app se MODELS_USE_SP. Dados seguem OBO.
-    client = (build_sp_client(settings.host_url, settings.databricks_config_profile)
-              if settings.models_use_sp else build_async_client(settings.host_url, user.token))
+    # base_path decide Unity Gateway vs endpoint clássico (settings.model_serving_path).
+    client = (build_sp_client(settings.host_url, settings.databricks_config_profile, settings.model_serving_path)
+              if settings.models_use_sp
+              else build_async_client(settings.host_url, user.token, settings.model_serving_path))
     final_answer = ""  # só a resposta do turno (não a narração pré-tool) é persistida
     used_tools = False
     tool_call_count = 0

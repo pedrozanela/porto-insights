@@ -14,10 +14,13 @@ env:
     value: porto_insights
   - name: SQL_WAREHOUSE_ID
     value: "848374d85d2bad86"
+  # Nomes system.ai.* = Unity Gateway (governança + usage + policies). Casam com MODEL_SERVING_PATH.
   - name: MODEL_ENDPOINTS
-    value: "databricks-claude-sonnet-5:Claude Sonnet 5,databricks-claude-opus-5:Claude Opus 5,databricks-gpt-5-5:GPT-5.5,databricks-gemini-3-8-flash:Gemini 3.8 Flash,databricks-llama-4-maverick:Llama 4 Maverick"
+    value: "system.ai.claude-sonnet-5:Claude Sonnet 5,system.ai.claude-opus-5:Claude Opus 5,system.ai.gpt-5-5:GPT-5.5,system.ai.gemini-3-8-flash:Gemini 3.8 Flash,system.ai.llama-4-maverick:Llama 4 Maverick"
   - name: DEFAULT_MODEL_ENDPOINT
-    value: databricks-claude-sonnet-5
+    value: system.ai.claude-sonnet-5
+  - name: MODEL_SERVING_PATH
+    value: "/ai-gateway/mlflow/v1"
   - name: GENIE_MAX_WAIT_S
     value: "260"
   - name: MCP_GOOGLE_SERVICES
@@ -29,7 +32,7 @@ env:
   - name: SEMANTIC_LINKER_MIN_CONFIDENCE
     value: "0.6"
   - name: LINKER_MODEL
-    value: "databricks-claude-haiku-4-5"
+    value: "system.ai.claude-haiku-4-5"
   # Chamadas de MODELO com a identidade do SP do app (M2M) em vez de OBO. Dados seguem OBO.
   - name: MODELS_USE_SP
     value: "true"

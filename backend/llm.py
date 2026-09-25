@@ -15,9 +15,10 @@ from openai import AsyncOpenAI
 logger = logging.getLogger("porto_insights.llm")
 
 
-def build_async_client(host_url: str, user_token: str) -> AsyncOpenAI:
-    """Cliente OBO: api_key = token do usuário (x-forwarded-access-token)."""
-    return AsyncOpenAI(base_url=f"{host_url}/serving-endpoints", api_key=user_token)
+def build_async_client(host_url: str, user_token: str, base_path: str = "/serving-endpoints") -> AsyncOpenAI:
+    """Cliente OBO: api_key = token do usuário (x-forwarded-access-token). base_path decide se vai
+    pelo Unity Gateway (/ai-gateway/mlflow/v1) ou pelo endpoint clássico (/serving-endpoints)."""
+    return AsyncOpenAI(base_url=f"{host_url}{base_path}", api_key=user_token)
 
 
 # Token do service principal do app (M2M), com cache/refresh — mesma identidade que o Lakebase usa.
@@ -44,10 +45,10 @@ def _sp_token_cached(profile: str) -> str:
     return _sp_token
 
 
-def build_sp_client(host_url: str, profile: str) -> AsyncOpenAI:
+def build_sp_client(host_url: str, profile: str, base_path: str = "/serving-endpoints") -> AsyncOpenAI:
     """Cliente com a identidade do SERVICE PRINCIPAL do app (M2M), para as chamadas de modelo
     quando MODELS_USE_SP=true. Os dados (Genie/Google) continuam OBO."""
-    return AsyncOpenAI(base_url=f"{host_url}/serving-endpoints", api_key=_sp_token_cached(profile))
+    return AsyncOpenAI(base_url=f"{host_url}{base_path}", api_key=_sp_token_cached(profile))
 
 
 def _delta_text(content: Any) -> str:
