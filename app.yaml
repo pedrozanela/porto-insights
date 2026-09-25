@@ -14,11 +14,14 @@ env:
     value: porto_insights
   - name: SQL_WAREHOUSE_ID
     value: "848374d85d2bad86"
-  # Nomes system.ai.* = Unity Gateway (governança + usage + policies). Casam com MODEL_SERVING_PATH.
+  # Model Service NOMEADO criado no AI Gateway: routing server-side (Sonnet 5 + GPT-5.5, 50/50) com
+  # fallback Opus 5. UM choke point governado (system.ai_gateway.usage + rate limits + policies). O
+  # app manda sempre este nome; o gateway decide a rota. Invocado via MODEL_SERVING_PATH. É um
+  # securable do UC (pzanela_classic_aws_catalog.porto_insights) — o SP do app precisa de EXECUTE.
   - name: MODEL_ENDPOINTS
-    value: "system.ai.claude-sonnet-5:Claude Sonnet 5,system.ai.claude-opus-5:Claude Opus 5,system.ai.gpt-5-5:GPT-5.5,system.ai.gemini-3-8-flash:Gemini 3.8 Flash,system.ai.llama-4-maverick:Llama 4 Maverick"
+    value: "pzanela_classic_aws_catalog.porto_insights.porto_insights_gateway:Porto Insights Gateway"
   - name: DEFAULT_MODEL_ENDPOINT
-    value: system.ai.claude-sonnet-5
+    value: pzanela_classic_aws_catalog.porto_insights.porto_insights_gateway
   - name: MODEL_SERVING_PATH
     value: "/ai-gateway/mlflow/v1"
   - name: GENIE_MAX_WAIT_S
@@ -31,6 +34,9 @@ env:
     value: "14"
   - name: SEMANTIC_LINKER_MIN_CONFIDENCE
     value: "0.6"
+  # Linker do grafo (extração de relações em JSON, roda a cada turno): fica no Haiku DIRETO, NÃO no
+  # routing gateway acima — rotear essa tarefa mecânica por Sonnet/GPT/Opus seria caro e mais lento
+  # sem ganho. Trocar para o gateway nomeado é só copiar o valor de DEFAULT_MODEL_ENDPOINT aqui.
   - name: LINKER_MODEL
     value: "system.ai.claude-haiku-4-5"
   # Chamadas de MODELO com a identidade do SP do app (M2M) em vez de OBO. Dados seguem OBO.

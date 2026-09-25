@@ -14,6 +14,14 @@ from openai import AsyncOpenAI
 
 logger = logging.getLogger("porto_insights.llm")
 
+# Modelos que rejeitam output_config (ex.: rotas GPT dentro de um Model Service de routing).
+# Guardamos o TIMESTAMP do último 400 por modelo e voltamos a tentar após um cooldown. Assim: se o
+# rejeitador for TRANSITÓRIO (ex.: routing em propagação depois de tirarem o GPT do mix), o effort
+# volta sozinho após o cooldown; se for PERMANENTE (GPT fixo no mix), pagamos só ~1 retry por
+# cooldown em vez de a cada turno. Por réplica (zera no restart).
+_NO_OUTPUT_CONFIG: dict[str, float] = {}
+_OUTPUT_CONFIG_COOLDOWN_S = 180
+
 
 def build_async_client(host_url: str, user_token: str, base_path: str = "/serving-endpoints") -> AsyncOpenAI:
     """Cliente OBO: api_key = token do usuário (x-forwarded-access-token). base_path decide se vai
@@ -86,8 +94,12 @@ async def stream_turn(
     `reasoning_effort` NÃO é aceito). Cache de prompt: o chamador marca o prefixo estável
     (tools + system) com cache_control; aqui só repassamos as mensagens."""
     kwargs: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens,
-                              "stream": True, "extra_body": {"output_config": {"effort": effort}},
-                              "stream_options": {"include_usage": True}}
+                              "stream": True, "stream_options": {"include_usage": True}}
+    # effort só quando o modelo aceita output_config. Depois de um 400 recente (dentro do cooldown)
+    # não mandamos; passado o cooldown, re-tentamos (auto-recupera se o rejeitador saiu do routing).
+    rejected_at = _NO_OUTPUT_CONFIG.get(model)
+    if rejected_at is None or (time.time() - rejected_at) > _OUTPUT_CONFIG_COOLDOWN_S:
+        kwargs["extra_body"] = {"output_config": {"effort": effort}}
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
@@ -95,10 +107,14 @@ async def stream_turn(
     try:
         stream = await client.chat.completions.create(**kwargs)
     except Exception as e:  # noqa: BLE001
-        # Modelo sem suporte a output_config.effort (ex.: Haiku, e possivelmente GPT/Gemini/Llama)
-        # devolve 400 mencionando "effort" — reenvia sem o parâmetro em vez de quebrar o turno.
-        if "effort" in str(e).lower() and "extra_body" in kwargs:
-            logger.info("modelo %s não suporta effort — reenviando sem", model)
+        # Modelo/serviço sem suporte a output_config.effort (Haiku, rotas GPT, Model Services de
+        # routing) devolve 400 tipo "Unknown parameter: 'output_config'" ou mencionando "effort".
+        # Marca o timestamp p/ pausar o param por um cooldown e reenvia esta sem o parâmetro.
+        es = str(e).lower()
+        if kwargs.get("extra_body") and ("output_config" in es or "effort" in es or "unknown_parameter" in es):
+            logger.info("modelo %s rejeita output_config — pausando effort por %ds e reenviando sem",
+                        model, _OUTPUT_CONFIG_COOLDOWN_S)
+            _NO_OUTPUT_CONFIG[model] = time.time()
             kwargs.pop("extra_body", None)
             stream = await client.chat.completions.create(**kwargs)
         else:
