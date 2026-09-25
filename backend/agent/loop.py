@@ -29,7 +29,7 @@ from ..graph.promotion import bare_visible_events, enforce_no_orphans, promote, 
 from ..graph.schema import GraphNode, delta_payload, is_visible
 from ..graph.suggestions import build_suggestions
 from ..graph.store import GraphStore
-from ..llm import build_async_client, stream_turn
+from ..llm import build_async_client, build_sp_client, stream_turn
 from ..mcp.client import mcp_session, structured, text_content
 from ..mcp.registry import get_registry
 from ..sse import sse
@@ -404,7 +404,9 @@ async def _run_turn_impl(user, settings, store, graph, conversation_id, user_mes
     working += [{"role": m.role, "content": m.content} for m in history]
     working.append({"role": "user", "content": user_message})
 
-    client = build_async_client(settings.host_url, user.token)
+    # Modelos: OBO (token do usuário) por padrão; SP do app se MODELS_USE_SP. Dados seguem OBO.
+    client = (build_sp_client(settings.host_url, settings.databricks_config_profile)
+              if settings.models_use_sp else build_async_client(settings.host_url, user.token))
     final_answer = ""  # só a resposta do turno (não a narração pré-tool) é persistida
     used_tools = False
     tool_call_count = 0

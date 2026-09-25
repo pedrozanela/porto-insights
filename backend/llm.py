@@ -6,6 +6,8 @@ usuário). Assíncrono porque o loop do agente também faz chamadas MCP assíncr
 from __future__ import annotations
 
 import logging
+import os
+import time
 from typing import Any, AsyncIterator
 
 from openai import AsyncOpenAI
@@ -14,7 +16,38 @@ logger = logging.getLogger("porto_insights.llm")
 
 
 def build_async_client(host_url: str, user_token: str) -> AsyncOpenAI:
+    """Cliente OBO: api_key = token do usuário (x-forwarded-access-token)."""
     return AsyncOpenAI(base_url=f"{host_url}/serving-endpoints", api_key=user_token)
+
+
+# Token do service principal do app (M2M), com cache/refresh — mesma identidade que o Lakebase usa.
+_sp_wsc = None
+_sp_token: str = ""
+_sp_token_at: float = 0.0
+_SP_TTL_S = 40 * 60  # tokens M2M ~1h; renova antes
+
+
+def _sp_token_cached(profile: str) -> str:
+    global _sp_wsc, _sp_token, _sp_token_at
+    now = time.time()
+    if _sp_token and now - _sp_token_at < _SP_TTL_S:
+        return _sp_token
+    from databricks.sdk import WorkspaceClient
+    if _sp_wsc is None:
+        # Prod (Databricks Apps): identidade do SP via default credential chain (M2M).
+        # Dev local: profile do CLI.
+        _sp_wsc = WorkspaceClient() if os.environ.get("DATABRICKS_APP_PORT") else WorkspaceClient(profile=profile)
+    hdrs = _sp_wsc.config.authenticate()  # {"Authorization": "Bearer <token>"}
+    auth = hdrs.get("Authorization", "")
+    _sp_token = auth.split(" ", 1)[1].strip() if " " in auth else auth
+    _sp_token_at = now
+    return _sp_token
+
+
+def build_sp_client(host_url: str, profile: str) -> AsyncOpenAI:
+    """Cliente com a identidade do SERVICE PRINCIPAL do app (M2M), para as chamadas de modelo
+    quando MODELS_USE_SP=true. Os dados (Genie/Google) continuam OBO."""
+    return AsyncOpenAI(base_url=f"{host_url}/serving-endpoints", api_key=_sp_token_cached(profile))
 
 
 def _delta_text(content: Any) -> str:

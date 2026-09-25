@@ -30,6 +30,9 @@ env:
     value: "0.6"
   - name: LINKER_MODEL
     value: "databricks-claude-haiku-4-5"
+  # Chamadas de MODELO com a identidade do SP do app (M2M) em vez de OBO. Dados seguem OBO.
+  - name: MODELS_USE_SP
+    value: "true"
   - name: TIME_WINDOW_DAYS
     value: "3"
   - name: LOG_LEVEL

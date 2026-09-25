@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # Modelo do linker semântico (extração de relações em JSON). Vazio = usa o modelo da conversa;
     # um modelo mais rápido/barato (Haiku) corta latência sem perder qualidade nessa tarefa mecânica.
     linker_model: str = Field(default="", alias="LINKER_MODEL")
+    # Auth das CHAMADAS DE MODELO: false = OBO (token do usuário); true = service principal do app
+    # (M2M). Dados (Genie/Google) seguem SEMPRE OBO. Billing/auditoria/rate-limit passam ao SP.
+    models_use_sp: bool = Field(default=False, alias="MODELS_USE_SP")
 
     # Observabilidade
     mlflow_experiment_path: str = ""
