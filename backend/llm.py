@@ -91,7 +91,17 @@ async def stream_turn(
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
 
-    stream = await client.chat.completions.create(**kwargs)
+    try:
+        stream = await client.chat.completions.create(**kwargs)
+    except Exception as e:  # noqa: BLE001
+        # Modelo sem suporte a output_config.effort (ex.: Haiku, e possivelmente GPT/Gemini/Llama)
+        # devolve 400 mencionando "effort" — reenvia sem o parâmetro em vez de quebrar o turno.
+        if "effort" in str(e).lower() and "extra_body" in kwargs:
+            logger.info("modelo %s não suporta effort — reenviando sem", model)
+            kwargs.pop("extra_body", None)
+            stream = await client.chat.completions.create(**kwargs)
+        else:
+            raise
 
     content_parts: list[str] = []
     # acumula tool_calls por índice (chegam fragmentados no streaming)

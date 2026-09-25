@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 from pydantic import BaseModel, ValidationError
@@ -58,10 +58,16 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
     try:
         if "," in value:  # RFC 2822 (data de email)
-            return parsedate_to_datetime(value)
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            dt = parsedate_to_datetime(value)
+        else:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except Exception:  # noqa: BLE001
         return None
+    # Normaliza para NAIVE (UTC): emails vêm tz-aware e eventos podem vir naive; sem isto, a
+    # subtração em same_time_window mistura naive/aware e estoura TypeError.
+    if dt is not None and dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 def deterministic_links(state: GraphState, turn: int, time_window_days: int) -> list[GraphEdge]:
@@ -286,9 +292,10 @@ async def _call_linker(client, model: str, prompt: str) -> tuple[dict | None, st
     Retorna (data|None, mode, error)."""
     for mode, kwargs in (("json_object", {"response_format": {"type": "json_object"}}), ("plain", {})):
         try:
+            # Sem `effort`: o linker roda no Haiku, que REJEITA output_config.effort (400). Haiku
+            # já é rápido; o effort ficava só no chat (Sonnet, que suporta).
             resp = await client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}], max_tokens=1500,
-                extra_body={"output_config": {"effort": "low"}}, **kwargs)  # extração JSON: reasoning baixo
+                model=model, messages=[{"role": "user", "content": prompt}], max_tokens=1500, **kwargs)
             # content pode vir como str OU lista de blocos (Claude no Databricks) → _delta_text.
             content = _delta_text(resp.choices[0].message.content)
             frag = content[content.find("{"): content.rfind("}") + 1]

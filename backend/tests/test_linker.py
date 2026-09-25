@@ -155,3 +155,14 @@ def test_precedencia_deterministica_pair_linked():
     assert pair_linked(st, "genie:x", "asset:table:cat.sch.mv")
     assert pair_linked(st, "asset:table:cat.sch.mv", "genie:x")
     assert not pair_linked(st, "genie:x", "inexistente")
+
+
+def test_same_time_window_mixed_tz_no_crash():
+    # Regressão: email tz-aware (RFC 2822 c/ offset) + evento naive não pode estourar
+    # "can't subtract offset-naive and offset-aware datetimes" na janela de tempo.
+    state = GraphState()
+    state.add_node(GraphNode(id="em|1", type="email", label="Re: reunião", source="gmail",
+                             first_seen_turn=1, props={"date": "Mon, 21 Sep 2026 15:00:00 +0000", "_text": "x"}))
+    state.add_node(GraphNode(id="ev|1", type="calendar_event", label="Reunião", source="calendar",
+                             first_seen_turn=1, props={"start": "2026-09-21T15:00:00", "_text": "y"}))
+    deterministic_links(state, turn=1, time_window_days=3)  # não deve lançar TypeError
