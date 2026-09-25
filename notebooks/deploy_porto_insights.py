@@ -53,12 +53,24 @@ DEFAULTS = {
     "warehouse_id": "",
     "porto_catalog": "main",
     "porto_schema": "porto_insights",
+    # Modo DIRETO (create_gateway=false): nomes system.ai.* invocados pelo Unity Gateway
+    # (MODEL_SERVING_PATH=/ai-gateway/mlflow/v1). O usuário escolhe o modelo no próprio app.
     "model_endpoints": (
-        "databricks-claude-sonnet-5:Claude Sonnet 5,"
-        "databricks-claude-opus-5:Claude Opus 5,"
-        "databricks-gpt-5-5:GPT-5.5"
+        "system.ai.claude-sonnet-5:Claude Sonnet 5,"
+        "system.ai.claude-opus-5:Claude Opus 5,"
+        "system.ai.gpt-5-5:GPT-5.5"
     ),
-    "default_model_endpoint": "databricks-claude-sonnet-5",
+    "default_model_endpoint": "system.ai.claude-sonnet-5",
+    # Modo GATEWAY (create_gateway=true): o notebook CRIA um Model Service de routing e aponta o
+    # app p/ ele (governança + fallback num só choke point; effort=low funciona pois só entram
+    # Sonnet/Opus, que aceitam o parâmetro — GPT/Haiku rejeitam).
+    "create_gateway": "false",
+    "gateway_name": "porto_insights_gateway",
+    "gateway_primary_models": (
+        "system.ai.databricks-claude-sonnet-5,"
+        "system.ai.databricks-claude-opus-5"
+    ),
+    "gateway_fallback_model": "system.ai.databricks-claude-opus-5-5",
     "lakebase_project_id": "porto-insights",
     "lakebase_min_cu": "0.5",
     "lakebase_max_cu": "1.0",
@@ -74,8 +86,12 @@ WIDGET_LABELS = {
     "warehouse_id": "SQL warehouse ID (em branco = seleção automática)",
     "porto_catalog": "Catálogo UC dos dados (rótulos de data asset)",
     "porto_schema": "Schema UC dos dados",
-    "model_endpoints": "Endpoints de modelo (nome:Rótulo, separados por vírgula)",
-    "default_model_endpoint": "Endpoint de modelo padrão",
+    "model_endpoints": "Modo direto: endpoints de modelo (nome:Rótulo, separados por vírgula)",
+    "default_model_endpoint": "Modo direto: endpoint de modelo padrão",
+    "create_gateway": "Criar AI Gateway de routing (em vez de modelos diretos)",
+    "gateway_name": "AI Gateway: nome do Model Service (se create_gateway)",
+    "gateway_primary_models": "AI Gateway: modelos primários (system.ai.*, vírgula; tráfego dividido igual)",
+    "gateway_fallback_model": "AI Gateway: modelo de fallback",
     "lakebase_project_id": "ID do projeto Lakebase (histórico de chat)",
     "lakebase_min_cu": "Lakebase — compute mínimo (CU)",
     "lakebase_max_cu": "Lakebase — compute máximo (CU)",
@@ -87,6 +103,7 @@ WIDGET_LABELS = {
 }
 
 DROPDOWN_WIDGETS = {
+    "create_gateway": ["false", "true"],
     "enable_web_search": ["true", "false"],
     "run_app": ["true", "false"],
     "smoke_test": ["true", "false"],
@@ -140,6 +157,8 @@ def validate_lakebase_compute(min_cu: float, max_cu: float, suspend_seconds: int
 APP_DESCRIPTION = "Porto Insights — copiloto executivo (Genie One, Google Workspace, grafo)."
 APP_NAME_PATTERN = r"[a-z0-9][a-z0-9-]{1,29}"
 OBO_SCOPES = ["genie", "model-serving", "ai-gateway", "catalog.tables:read"]
+MODEL_SERVING_PATH = "/ai-gateway/mlflow/v1"  # ambos os modos passam pelo Unity Gateway
+GATEWAY_LABEL = "Porto Insights Gateway"      # rótulo do modelo no seletor do app (modo gateway)
 
 
 @dataclass(frozen=True)
@@ -150,6 +169,10 @@ class DeployConfig:
     porto_schema: str
     model_endpoints: str
     default_model_endpoint: str
+    create_gateway: bool
+    gateway_name: str
+    gateway_primary_models: str
+    gateway_fallback_model: str
     lakebase_project_id: str
     lakebase_min_cu: float
     lakebase_max_cu: float
@@ -167,6 +190,10 @@ CONFIG = DeployConfig(
     porto_schema=widget("porto_schema"),
     model_endpoints=widget("model_endpoints"),
     default_model_endpoint=widget("default_model_endpoint"),
+    create_gateway=as_bool(widget("create_gateway")),
+    gateway_name=widget("gateway_name"),
+    gateway_primary_models=widget("gateway_primary_models"),
+    gateway_fallback_model=widget("gateway_fallback_model"),
     lakebase_project_id=widget("lakebase_project_id"),
     lakebase_min_cu=as_float(widget("lakebase_min_cu"), "lakebase_min_cu"),
     lakebase_max_cu=as_float(widget("lakebase_max_cu"), "lakebase_max_cu"),
@@ -188,7 +215,9 @@ print(json.dumps({
     "lakebase_project_id": CONFIG.lakebase_project_id,
     "lakebase_autoscaling_cu": f"{CONFIG.lakebase_min_cu:g}-{CONFIG.lakebase_max_cu:g} CU",
     "lakebase_scale_to_zero_seconds": CONFIG.lakebase_scale_to_zero_seconds,
-    "default_model_endpoint": CONFIG.default_model_endpoint,
+    "modelo": (f"AI Gateway '{CONFIG.gateway_name}' (routing: {CONFIG.gateway_primary_models}"
+               f" | fallback: {CONFIG.gateway_fallback_model})" if CONFIG.create_gateway
+               else f"direto (padrão: {CONFIG.default_model_endpoint})"),
     "enable_web_search": CONFIG.enable_web_search,
     "obo_scopes": OBO_SCOPES,
     "run_app": CONFIG.run_app,
@@ -383,7 +412,8 @@ def override_app_yaml(text: str, overrides: dict[str, str]) -> str:
     return "\n".join(out) + "\n"
 
 
-def stage_source(repo_root: Path, cfg: DeployConfig, warehouse_id: str) -> Path:
+def stage_source(repo_root: Path, cfg: DeployConfig, warehouse_id: str,
+                 model_endpoints: str, default_model_endpoint: str) -> Path:
     base = Path("/local_disk0") if os.access("/local_disk0", os.W_OK) else Path(tempfile.gettempdir())
     work = Path(tempfile.mkdtemp(prefix="porto-deploy-", dir=base)) / "porto-insights"
     work.mkdir(parents=True)
@@ -413,8 +443,11 @@ def stage_source(repo_root: Path, cfg: DeployConfig, warehouse_id: str) -> Path:
         "SQL_WAREHOUSE_ID": warehouse_id,
         "PORTO_CATALOG": cfg.porto_catalog,
         "PORTO_SCHEMA": cfg.porto_schema,
-        "MODEL_ENDPOINTS": cfg.model_endpoints,
-        "DEFAULT_MODEL_ENDPOINT": cfg.default_model_endpoint,
+        # Nomes (system.ai.* diretos ou o Model Service de routing) resolvidos em main() conforme
+        # create_gateway; o caminho é sempre o Unity Gateway.
+        "MODEL_ENDPOINTS": model_endpoints,
+        "DEFAULT_MODEL_ENDPOINT": default_model_endpoint,
+        "MODEL_SERVING_PATH": MODEL_SERVING_PATH,
         "MCP_WEB_SEARCH_ENABLED": "true" if cfg.enable_web_search else "false",
         # O notebook é dono de TODA a config específica de workspace: zera a observabilidade
         # (o path do experimento no repo é do ambiente de dev; tracing é opt-in por workspace).
@@ -695,6 +728,95 @@ def smoke_test(app_url: str) -> None:
 
 # COMMAND ----------
 
+# DBTITLE 1,AI Gateway de routing (opcional — create_gateway=true)
+# Cria um "Model Service" do AI Gateway (securable UC do tipo model_service) que roteia a inferência
+# entre modelos primários (tráfego dividido) com um fallback. Vantagens: um choke point governado
+# (system.ai_gateway.usage + rate limits + policies) e o effort=low funcionando (só entram
+# Sonnet/Opus, que aceitam o parâmetro). API: /api/2.1/unity-catalog/model-services.
+def _even_traffic(n: int) -> list[int]:
+    """Divide 100% igualmente entre n destinos; o 1º absorve o resto p/ somar exatamente 100."""
+    if n <= 0:
+        return []
+    base = 100 // n
+    shares = [base] * n
+    shares[0] += 100 - base * n
+    return shares
+
+
+def _foundation_destination(model_ref: str, traffic: int) -> dict[str, Any]:
+    # model_ref no formato do gateway, ex.: "system.ai.databricks-claude-sonnet-5"
+    return {
+        "destination_type": "DESTINATION_TYPE_PAY_PER_TOKEN_FOUNDATION_MODEL",
+        "name": model_ref,
+        "pay_per_token_config": {"model": f"models/{model_ref}"},
+        "traffic_percentage": traffic,
+    }
+
+
+def build_routing_config(primary_models: list[str], fallback_model: str) -> dict[str, Any]:
+    if not primary_models:
+        fail("Gateway: informe ao menos um modelo primário em `gateway_primary_models`.")
+    shares = _even_traffic(len(primary_models))
+    routing: dict[str, Any] = {
+        "destinations": [_foundation_destination(m, t) for m, t in zip(primary_models, shares)],
+    }
+    if fallback_model:
+        routing["fallback"] = {"destinations": [_foundation_destination(fallback_model, 0)]}
+    return {"routing": routing}
+
+
+def ensure_schema(catalog: str, schema: str) -> None:
+    """Garante que o schema UC exista (o Model Service precisa de um schema pai)."""
+    full = f"{catalog}.{schema}"
+    try:
+        dbx_api("GET", f"/api/2.1/unity-catalog/schemas/{full}")
+        return
+    except DbxApiError as err:
+        if err.status != 404:
+            raise
+    print(f"Criando schema UC (pai do AI Gateway): {full}")
+    dbx_api("POST", "/api/2.1/unity-catalog/schemas", {"name": schema, "catalog_name": catalog})
+
+
+def ensure_model_service(catalog: str, schema: str, name: str,
+                         primary_models: list[str], fallback_model: str) -> str:
+    """Cria o Model Service de routing se não existir; se já existir, REUTILIZA (não sobrescreve
+    — respeita eventual customização do cliente). Retorna o nome de 3 níveis catalog.schema.name."""
+    full = f"{catalog}.{schema}.{name}"
+    try:
+        dbx_api("GET", f"/api/2.1/unity-catalog/model-services/{full}")
+        print(f"AI Gateway já existe (reutilizando, sem sobrescrever): {full}")
+        return full
+    except DbxApiError as err:
+        if err.status != 404:
+            raise
+
+    ensure_schema(catalog, schema)
+    params = f"model_service_id={name}&parent=schemas/{catalog}.{schema}"
+    print(f"Criando AI Gateway (routing): {full}")
+    print(f"  primários: {primary_models} | fallback: {fallback_model or '(nenhum)'}")
+    try:
+        dbx_api("POST", f"/api/2.1/unity-catalog/model-services?{params}",
+                {"config": build_routing_config(primary_models, fallback_model)})
+    except DbxApiError as err:
+        models = primary_models + ([fallback_model] if fallback_model else [])
+        fail(f"Falha ao criar o AI Gateway `{full}`: {err.body[:400]}\n"
+             f"Confira se {models} existem como foundation models (system.ai.*) neste workspace "
+             f"e se você tem CREATE_SERVICE + USE_SCHEMA no schema (e USE_CATALOG no catálogo).")
+    return full
+
+
+def grant_model_service_execute(full_name: str, principal: str) -> None:
+    """Concede EXECUTE no Model Service ao SP do app (idempotente). O 404 do app ao chamar o
+    gateway vem justamente da falta desse grant."""
+    if not principal:
+        fail("Não obtive o service principal do app para conceder EXECUTE no gateway.")
+    dbx_api("PATCH", f"/api/2.1/unity-catalog/permissions/model_service/{full_name}",
+            {"changes": [{"principal": principal, "add": ["EXECUTE"]}]})
+    print(f"EXECUTE concedido ao SP do app no gateway: {principal}")
+
+# COMMAND ----------
+
 # DBTITLE 1,Executar o deploy
 def main() -> None:
     print("=" * 72)
@@ -711,10 +833,35 @@ def main() -> None:
 
     repo_root = find_repo_root()
     print(f"Repositório encontrado em: {repo_root}")
-    work = stage_source(repo_root, CONFIG, warehouse_id)
+
+    # Config de modelo: AI Gateway de routing (opcional) OU modelos system.ai.* diretos.
+    # O gateway é criado ANTES de publicar/deployar (o app precisa dele no ar); o grant do SP
+    # vem depois de criar o app (o SP só existe então).
+    gateway_full = ""
+    if CONFIG.create_gateway:
+        primary = [m.strip() for m in CONFIG.gateway_primary_models.split(",") if m.strip()]
+        gateway_full = ensure_model_service(
+            CONFIG.porto_catalog, CONFIG.porto_schema, CONFIG.gateway_name,
+            primary, CONFIG.gateway_fallback_model.strip())
+        model_endpoints = f"{gateway_full}:{GATEWAY_LABEL}"
+        default_model_endpoint = gateway_full
+    else:
+        model_endpoints = CONFIG.model_endpoints
+        default_model_endpoint = CONFIG.default_model_endpoint
+
+    work = stage_source(repo_root, CONFIG, warehouse_id, model_endpoints, default_model_endpoint)
     source_path = publish_source(work, CONFIG.app_name)
 
     meta = ensure_app(CONFIG, warehouse_id, branch_name, database_name)
+
+    # O SP do app só existe depois de criar o app → conceder EXECUTE no gateway agora (sem isso o
+    # app chama o Model Service e toma 404).
+    if CONFIG.create_gateway:
+        sp = meta.get("service_principal_client_id") or ""
+        if not sp:
+            sp = wait_app_service_principal(CONFIG.app_name).get("service_principal_client_id") or ""
+        grant_model_service_execute(gateway_full, sp)
+
     # O compute precisa estar ACTIVE ANTES do deployment (a API recusa deploy fora de RUNNING).
     meta = ensure_app_compute_active(CONFIG.app_name)
     ensure_app_deployment(CONFIG.app_name, source_path)
@@ -730,6 +877,12 @@ def main() -> None:
     print("Deploy concluído.")
     print(f"App: {CONFIG.app_name}")
     print(f"URL: {app_url or '(inicie o app para obter a URL)'}")
+    if CONFIG.create_gateway:
+        print(f"Modelo: AI Gateway de routing {gateway_full} (effort=low ativo).")
+        print("Obs.: o grant do SP e o routing levam ~2-3 min p/ propagar; as primeiras perguntas")
+        print("      podem falhar até lá — o app se recupera sozinho (cache de effort com cooldown).")
+    else:
+        print(f"Modelo: direto — padrão {default_model_endpoint} (usuário escolhe no app).")
     print("Lembrete: os conectores Google e a busca na web pedem consentimento OAuth por usuário,")
     print("dentro do app, na primeira vez que cada conta é usada.")
     print("=" * 72)
