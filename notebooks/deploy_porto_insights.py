@@ -7,20 +7,32 @@
 # MAGIC token do próprio notebook) e faz, de ponta a ponta:
 # MAGIC
 # MAGIC 1. Cria (ou reutiliza) o projeto **Lakebase** que guarda o histórico de conversas.
-# MAGIC 2. Publica o código do app (backend FastAPI + frontend já buildado) no seu Workspace.
+# MAGIC 2. Publica o código do app (backend FastAPI + fonte do frontend) no seu Workspace.
 # MAGIC 3. Cria/atualiza o **Databricks App** com os *resources* (warehouse + Lakebase) e os
 # MAGIC    **escopos OBO** corretos (`genie`, `model-serving`, `ai-gateway`, `catalog.tables:read`).
 # MAGIC 4. Faz o *deployment*, sobe o compute e roda um *smoke-test* das rotas.
 # MAGIC
 # MAGIC ## Pré-requisitos
 # MAGIC - Importar **a pasta inteira do repositório** no Workspace (Git folder ou import de ZIP),
-# MAGIC   com este notebook em `notebooks/` — o `frontend/dist/` já vem buildado no repo.
+# MAGIC   com este notebook em `notebooks/`.
 # MAGIC - Ter pelo menos **um Genie Space** acessível ao usuário (o app usa Genie One, que descobre
 # MAGIC   os spaces automaticamente — não precisa de ID).
 # MAGIC - Os conectores **Google Workspace** (`system.ai.gmail`/`google_calendar`/`google_drive`) e a
 # MAGIC   **busca na web** (`system.ai.web_search`) são serviços built-in: o consentimento OAuth é
 # MAGIC   feito por usuário, dentro do app, na primeira vez que cada conta é usada.
 # MAGIC - Um **SQL Warehouse** (deixe o widget em branco para selecionar um automaticamente).
+# MAGIC
+# MAGIC ## Como alterar o frontend (ex.: com o Genie Code)
+# MAGIC O app serve o frontend **compilado** (React + TypeScript + Vite → `frontend/dist/`), então
+# MAGIC editar `frontend/src/` só tem efeito depois de um build. Com `frontend_build = app` (padrão),
+# MAGIC este notebook publica o fonte do frontend e o **próprio Databricks Apps builda no deploy**
+# MAGIC (`npm install` + `npm run build`, Node 22) — basta editar `frontend/src/` nesta pasta e rodar
+# MAGIC o notebook de novo. Não edite `frontend/dist/` à mão (é JS minificado, gerado pelo build).
+# MAGIC - Se o build falhar, o erro aparece nos **logs do App** (aba *Logs*) — normalmente erro de
+# MAGIC   TypeScript na edição, ou o App sem acesso ao registry público do npm. Neste caso, informe o
+# MAGIC   mirror interno em `npm_registry`.
+# MAGIC - `frontend_build = prebuilt` usa o `frontend/dist/` versionado no repo, sem build (e sem as
+# MAGIC   edições em `frontend/src/`).
 
 # COMMAND ----------
 
@@ -77,6 +89,10 @@ DEFAULTS = {
     "lakebase_scale_to_zero_seconds": "300",
     "enable_web_search": "false",  # system.ai.web_search só existe em AWS/GCP (não Azure)
     "mlflow_experiment_path": "",  # vazio = tracing desligado; informe um experimento p/ ligar
+    # app = o Databricks Apps builda o frontend/src no deploy (edições no fonte valem);
+    # prebuilt = publica o frontend/dist/ versionado no repo, sem build.
+    "frontend_build": "app",
+    "npm_registry": "",  # vazio = registry público do npm; preencha com o mirror interno se bloqueado
     "run_app": "true",
     "smoke_test": "true",
 }
@@ -98,6 +114,8 @@ WIDGET_LABELS = {
     "lakebase_scale_to_zero_seconds": "Lakebase — segundos ociosos até escalar a zero",
     "enable_web_search": "Habilitar busca na web (só AWS/GCP; indisponível na Azure)",
     "mlflow_experiment_path": "MLflow: caminho do experimento p/ traces (vazio = desligado)",
+    "frontend_build": "Frontend: app = builda frontend/src no deploy; prebuilt = usa frontend/dist",
+    "npm_registry": "Frontend: registry npm alternativo (mirror interno; vazio = público)",
     "run_app": "Iniciar o app após o deploy",
     "smoke_test": "Testar as rotas após o deploy",
 }
@@ -105,6 +123,7 @@ WIDGET_LABELS = {
 DROPDOWN_WIDGETS = {
     "create_gateway": ["false", "true"],
     "enable_web_search": ["true", "false"],
+    "frontend_build": ["app", "prebuilt"],
     "run_app": ["true", "false"],
     "smoke_test": ["true", "false"],
 }
@@ -179,6 +198,8 @@ class DeployConfig:
     lakebase_scale_to_zero_seconds: int
     enable_web_search: bool
     mlflow_experiment_path: str
+    frontend_build: str
+    npm_registry: str
     run_app: bool
     smoke_test: bool
 
@@ -200,6 +221,8 @@ CONFIG = DeployConfig(
     lakebase_scale_to_zero_seconds=as_int(widget("lakebase_scale_to_zero_seconds"), "lakebase_scale_to_zero_seconds"),
     enable_web_search=as_bool(widget("enable_web_search")),
     mlflow_experiment_path=widget("mlflow_experiment_path") if widget("mlflow_experiment_path") != DEFAULTS["mlflow_experiment_path"] else "",
+    frontend_build=widget("frontend_build"),
+    npm_registry=widget("npm_registry"),
     run_app=as_bool(widget("run_app")),
     smoke_test=as_bool(widget("smoke_test")),
 )
@@ -207,6 +230,8 @@ CONFIG = DeployConfig(
 if not re.fullmatch(APP_NAME_PATTERN, CONFIG.app_name):
     raise ValueError("O nome do app deve ter 2–30 caracteres minúsculos alfanuméricos ou hífens.")
 validate_lakebase_compute(CONFIG.lakebase_min_cu, CONFIG.lakebase_max_cu, CONFIG.lakebase_scale_to_zero_seconds)
+if CONFIG.frontend_build not in DROPDOWN_WIDGETS["frontend_build"]:
+    raise ValueError(f"`frontend_build` deve ser 'app' ou 'prebuilt'; recebi {CONFIG.frontend_build!r}.")
 
 print("Plano de deploy do Porto Insights:")
 print(json.dumps({
@@ -219,6 +244,8 @@ print(json.dumps({
                f" | fallback: {CONFIG.gateway_fallback_model})" if CONFIG.create_gateway
                else f"direto (padrão: {CONFIG.default_model_endpoint})"),
     "enable_web_search": CONFIG.enable_web_search,
+    "frontend_build": (f"app (build no deploy; registry {CONFIG.npm_registry or 'público'})"
+                       if CONFIG.frontend_build == "app" else "prebuilt (frontend/dist versionado)"),
     "obo_scopes": OBO_SCOPES,
     "run_app": CONFIG.run_app,
     "smoke_test": CONFIG.smoke_test,
@@ -359,6 +386,18 @@ RUNTIME_EXCLUDED_PARTS = {"__pycache__", "node_modules", ".git", ".venv", "tests
 RUNTIME_EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".map", ".tsbuildinfo"}
 MAX_APP_SOURCE_FILE_BYTES = 10 * 1024 * 1024
 
+# package.json gerado na RAIZ do código publicado (frontend_build=app). O Databricks Apps só builda
+# quando acha um package.json na raiz: roda `npm install` (no-op, sem dependências aqui) e depois o
+# script `build`, que instala e builda o frontend/ (gera frontend/dist, servido pelo FastAPI).
+# --include=dev: vite/typescript são devDependencies e precisam existir mesmo com NODE_ENV=production.
+APP_BUILD_PACKAGE_JSON = {
+    "name": "porto-insights-app",
+    "private": True,
+    "scripts": {
+        "build": "cd frontend && npm install --include=dev --no-audit --no-fund && npm run build",
+    },
+}
+
 
 def find_repo_root() -> Path:
     starts = [Path.cwd().resolve()]
@@ -377,11 +416,11 @@ def find_repo_root() -> Path:
                 continue
             seen.add(candidate)
             if (candidate / "app.yaml").exists() and (candidate / "backend").is_dir() \
-                    and (candidate / "frontend" / "dist").is_dir():
+                    and (candidate / "frontend").is_dir():
                 return candidate
     fail(
         "Não encontrei o repositório do Porto Insights ao lado deste notebook. "
-        "Importe a PASTA INTEIRA do repo no Workspace (com backend/, frontend/dist/ e app.yaml) "
+        "Importe a PASTA INTEIRA do repo no Workspace (com backend/, frontend/ e app.yaml) "
         "e mantenha este notebook em notebooks/."
     )
 
@@ -418,11 +457,12 @@ def stage_source(repo_root: Path, cfg: DeployConfig, warehouse_id: str,
     work = Path(tempfile.mkdtemp(prefix="porto-deploy-", dir=base)) / "porto-insights"
     work.mkdir(parents=True)
 
-    # copia backend/ e frontend/dist/, mais os arquivos de runtime da raiz
-    def _copytree(src: Path, dst: Path) -> None:
+    # copia backend/ e o frontend (fonte ou dist/, conforme frontend_build), mais os arquivos de
+    # runtime da raiz
+    def _copytree(src: Path, dst: Path, skip_parts: frozenset[str] = frozenset()) -> None:
         for path in sorted(src.rglob("*")):
             rel = path.relative_to(src)
-            if any(part in RUNTIME_EXCLUDED_PARTS for part in rel.parts):
+            if any(part in RUNTIME_EXCLUDED_PARTS or part in skip_parts for part in rel.parts):
                 continue
             if path.is_dir():
                 continue
@@ -433,7 +473,24 @@ def stage_source(repo_root: Path, cfg: DeployConfig, warehouse_id: str,
             shutil.copy(str(path), str(target))
 
     _copytree(repo_root / "backend", work / "backend")
-    _copytree(repo_root / "frontend" / "dist", work / "frontend" / "dist")
+    frontend = repo_root / "frontend"
+    if cfg.frontend_build == "app":
+        if not (frontend / "package.json").is_file() or not (frontend / "src").is_dir():
+            fail("frontend_build=app precisa de frontend/package.json e frontend/src/ na pasta do repo.")
+        # fonte sem o dist/ antigo: o build no deploy gera um novo, e assim um dist/ desatualizado
+        # nunca é servido no lugar das edições
+        _copytree(frontend, work / "frontend", skip_parts=frozenset({"dist"}))
+        (work / "package.json").write_text(json.dumps(APP_BUILD_PACKAGE_JSON, indent=2) + "\n", encoding="utf-8")
+        if cfg.npm_registry:
+            # acrescenta ao frontend/.npmrc do repo (que tem replace-registry-host=always: o
+            # registry abaixo vale até para as URLs gravadas no package-lock.json)
+            npmrc = work / "frontend" / ".npmrc"
+            existing = npmrc.read_text(encoding="utf-8") if npmrc.exists() else ""
+            npmrc.write_text(f"{existing.rstrip()}\nregistry={cfg.npm_registry}\n".lstrip(), encoding="utf-8")
+    else:
+        if not (frontend / "dist" / "index.html").is_file():
+            fail("frontend_build=prebuilt precisa de frontend/dist/ buildado na pasta do repo.")
+        _copytree(frontend / "dist", work / "frontend" / "dist")
     for fname in ("requirements.txt",):
         shutil.copy(str(repo_root / fname), str(work / fname))
 
@@ -646,7 +703,7 @@ def ensure_app(cfg: DeployConfig, warehouse_id: str, branch_name: str, database_
     return meta
 
 
-def ensure_app_deployment(app_name: str, source_path: str) -> dict[str, Any]:
+def ensure_app_deployment(app_name: str, source_path: str, failure_hint: str = "") -> dict[str, Any]:
     encoded = urllib.parse.quote(app_name, safe="")
     active = (dbx_api("GET", f"/api/2.0/apps/{encoded}").get("active_deployment") or {})
     if active.get("source_code_path") == source_path and active.get("status", {}).get("state") == "SUCCEEDED":
@@ -664,7 +721,7 @@ def ensure_app_deployment(app_name: str, source_path: str) -> dict[str, Any]:
             print("Deployment concluído.")
             return dep
         if state in {"FAILED", "STOPPED", "CANCELLED"}:
-            fail(f"Deployment terminou em {state}: {json.dumps(dep.get('status', {}))}")
+            fail(f"Deployment terminou em {state}: {json.dumps(dep.get('status', {}))}{failure_hint}")
         time.sleep(10)
     fail("Timeout esperando o deployment do App.")
 
@@ -713,7 +770,21 @@ def stop_app_compute(app_name: str) -> None:
             raise
 
 
+def smoke_test_frontend(app_url: str) -> None:
+    """Confere que a raiz devolve o index.html buildado (e não o aviso 'frontend não buildado')."""
+    req = urllib.request.Request(f"{app_url.rstrip('/')}/", headers={"Authorization": f"Bearer {DATABRICKS_TOKEN}"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            ok = 'id="root"' in body and "/assets/" in body
+            print(f"Smoke-test GET / → HTTP {resp.status} "
+                  f"{'OK (frontend buildado servido)' if ok else 'ATENÇÃO: o frontend não veio no deploy'}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Smoke-test do frontend não conclusivo: {exc}")
+
+
 def smoke_test(app_url: str) -> None:
+    smoke_test_frontend(app_url)
     target = f"{app_url.rstrip('/')}/api/me"
     req = urllib.request.Request(target, headers={"Authorization": f"Bearer {DATABRICKS_TOKEN}"})
     try:
@@ -864,7 +935,12 @@ def main() -> None:
 
     # O compute precisa estar ACTIVE ANTES do deployment (a API recusa deploy fora de RUNNING).
     meta = ensure_app_compute_active(CONFIG.app_name)
-    ensure_app_deployment(CONFIG.app_name, source_path)
+    build_hint = ""
+    if CONFIG.frontend_build == "app":
+        build_hint = ("\nO deploy builda o frontend (npm install + npm run build): veja o erro na aba Logs do App. "
+                      "Erro de TypeScript = corrigir a edição em frontend/src/; sem acesso ao npm = preencher "
+                      "`npm_registry` com o mirror interno (ou usar frontend_build=prebuilt).")
+    ensure_app_deployment(CONFIG.app_name, source_path, build_hint)
 
     app_url = meta.get("url") or dbx_api("GET", f"/api/2.0/apps/{urllib.parse.quote(CONFIG.app_name, safe='')}").get("url", "")
 

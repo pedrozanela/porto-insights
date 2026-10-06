@@ -91,6 +91,15 @@ cd frontend && npm install && npm run dev
 bash scripts/deploy.sh            # build do frontend + bundle deploy -t dev + run
 ```
 
+### Deploy pelo próprio workspace (sem CLI)
+
+Importe a pasta inteira do repo no Workspace e rode `notebooks/deploy_porto_insights.py` (cria o
+Lakebase, publica o código e cria/atualiza o App). Para **alterar o frontend no workspace** (à mão
+ou com o Genie Code), edite `frontend/src/` e rode o notebook de novo: com `frontend_build=app`
+(padrão) o Databricks Apps builda o frontend no deploy (`npm install` + `npm run build`). Não edite
+`frontend/dist/` — é JS minificado gerado pelo build; ele só é usado com `frontend_build=prebuilt`.
+Se o App não alcançar o registry público do npm, informe o mirror interno no widget `npm_registry`.
+
 Na **primeira visita** de cada usuário, o Databricks pede consentimento dos scopes OBO
 (`genie`, `model-serving`, `ai-gateway`). O histórico no Lakebase exige que o service principal
 do app seja dono do schema `porto_insights` — ver `docs/prerequisites-checklist.md`.
