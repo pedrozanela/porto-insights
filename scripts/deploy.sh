@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# Build do frontend + deploy do bundle no FEVM (target dev). Idempotente.
+# Deploy do bundle no FEVM (target dev). Idempotente. O frontend não tem build.
 set -euo pipefail
 PROFILE="${DATABRICKS_CONFIG_PROFILE:-fevm-pzanela-classic-aws}"
 cd "$(dirname "$0")/.."
-
-echo "==> build do frontend"
-bash scripts/build_frontend.sh
 
 echo "==> databricks bundle deploy -t dev"
 databricks bundle deploy -t dev -p "$PROFILE"

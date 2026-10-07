@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   emptyCtx, lodBand, lodThresholds, resolveLinkState, resolveNodeState, showEdgeLabel,
   showIcon, showNodeLabel, type StyleCtx, type StyleNode,
-} from "../graphStyle";
+} from "../src/graph/graphStyle";
 
 const node = (id: string, turn = 1, extra: Partial<StyleNode> = {}): StyleNode =>
   ({ id, type: "person", first_seen_turn: turn, props: {}, ...extra });

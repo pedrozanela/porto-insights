@@ -1,7 +1,7 @@
 // Tokens de identidade visual do Porto Insights — cores oficiais da Porto
 // (extraídas do app ai-prism-porto). Azul da vela = #00a1fc.
 //
-// Espelhados como CSS variables em index.css (:root), que o Tailwind consome. Ao ajustar,
+// Espelhados como CSS variables no index.html (:root), que o Tailwind consome. Ao ajustar,
 // atualize os dois lugares.
 
 export const theme = {

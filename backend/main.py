@@ -1,6 +1,6 @@
 """Porto Insights — app FastAPI de processo único.
 
-Serve a API em /api/* e o build do frontend (dist/) como arquivos estáticos. CORS fechado:
+Serve a API em /api/* e o frontend (frontend/, sem build) como arquivos estáticos. CORS fechado:
 o frontend é servido pelo mesmo host. Escuta na porta de DATABRICKS_APP_PORT (fallback 8000).
 """
 from __future__ import annotations
@@ -9,8 +9,7 @@ import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from .agent.loop import run_turn
@@ -65,8 +64,8 @@ class PromoteRequest(BaseModel):
     conversation_id: str
     node_ids: list[str]
 
-# dist/ do frontend (buildado antes do deploy). Em dev antes do 1º build pode não existir.
-DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+# Frontend SEM build: index.html + src/ (TSX, traduzido no navegador) + vendor/ servidos como estão.
+FRONTEND = (Path(__file__).resolve().parent.parent / "frontend").resolve()
 
 
 @app.get("/api/health")
@@ -155,17 +154,30 @@ def reset_conversation(conversation_id: str, user: UserContext = Depends(get_use
 
 
 # --- Arquivos estáticos do frontend (registrado por último; não intercepta /api/*) ---
-if DIST.exists():
-    app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
+# no-cache = o navegador revalida a cada carga (ETag → 304 se nada mudou). Sem isso, como os
+# arquivos têm nome fixo (não há build com hash), uma edição podia demorar horas para aparecer.
+NO_CACHE = {"Cache-Control": "no-cache"}
 
-    @app.get("/{full_path:path}")
-    def spa(full_path: str) -> FileResponse:
-        """Fallback SPA: qualquer rota não-API devolve o index.html do React."""
-        candidate = DIST / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(DIST / "index.html")
-else:
-    @app.get("/")
-    def no_build() -> dict:
-        return {"detail": "frontend não buildado — rode scripts/build_frontend.sh"}
+
+SOURCE_EXTS = (".tsx", ".ts", ".jsx", ".js")  # ordem de resolução de import sem extensão
+STATIC_DIRS = {"src", "vendor", "public"}       # arquivo inexistente aqui = 404 (não o index.html)
+
+
+@app.get("/{full_path:path}")
+def frontend(full_path: str) -> Response:
+    """Serve o arquivo pedido de frontend/; qualquer outra rota não-API devolve o index.html."""
+    candidate = (FRONTEND / full_path).resolve()
+    if full_path and candidate.is_relative_to(FRONTEND):
+        if candidate.is_file():
+            return FileResponse(candidate, headers=NO_CACHE)
+        # import sem extensão (`import App from "./App"`): redireciona para o arquivo real, como
+        # faria um bundler — assim o código TSX fica igual ao de um projeto React comum.
+        if full_path.startswith("src/") and not candidate.suffix:
+            for base in (candidate, candidate / "index"):
+                for ext in SOURCE_EXTS:
+                    if base.with_name(base.name + ext).is_file():
+                        target = "/" + str(base.relative_to(FRONTEND)) + ext
+                        return RedirectResponse(target, status_code=307, headers=NO_CACHE)
+        if full_path.split("/", 1)[0] in STATIC_DIRS:
+            return Response(status_code=404, headers=NO_CACHE)
+    return FileResponse(FRONTEND / "index.html", headers=NO_CACHE)

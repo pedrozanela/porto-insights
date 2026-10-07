@@ -6,14 +6,6 @@ __pycache__/
 docs/
 scripts/
 backend/tests/
-frontend/node_modules/
-frontend/src/
-frontend/public/
-frontend/index.html
-frontend/*.json
-frontend/*.ts
-frontend/*.js
-frontend/*.cjs
-frontend/*.config.*
+frontend/tests/
 docs/_raw_*.txt
 .DS_Store

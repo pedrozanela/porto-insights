@@ -5,7 +5,7 @@ export function BrandLogo() {
   return (
     <div className="flex items-center gap-2.5">
       <img
-        src="/porto-symbol.png"
+        src="/public/porto-symbol.png"
         width={30}
         height={30}
         alt="Porto"

@@ -4,7 +4,4 @@ __pycache__/
 .env
 docs/_raw_*.txt
 node_modules/
-# frontend/dist/ é versionado de propósito: é o fallback do notebook de deploy com
-# frontend_build=prebuilt (sem build no workspace). Rebuild via scripts/build_frontend.sh.
 .DS_Store
-frontend/*.tsbuildinfo

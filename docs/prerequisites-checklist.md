@@ -53,8 +53,8 @@ marcados com ✅ já foram feitos/validados no workspace de field engineering
       autorize o app a agir em cada scope. Documentar isso para os executivos.
 - [ ] **Variáveis de ambiente** preenchidas (ver `.env.example` / `app.yaml`): `MODEL_ENDPOINTS`,
       `DEFAULT_MODEL_ENDPOINT`, `SQL_WAREHOUSE_ID`, etc. Nenhum segredo em texto no `app.yaml`.
-- [ ] **Build do frontend** feito antes do deploy (`npm run build`), com o `dist/`
-      sincronizado. Não rodar `npm install` no startup do app.
+- [ ] **Frontend sem build:** `frontend/` vai como está (sem npm no deploy nem no startup).
+      O App não precisa de acesso ao registry do npm.
 
 ## Notas de reprodução na Porto
 

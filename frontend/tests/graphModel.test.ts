@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bfs, buildNeighbors, degreeMap, neighborsOf } from "../graphModel";
+import { bfs, buildNeighbors, degreeMap, neighborsOf } from "../src/graph/graphModel";
 
 // grafo: a-b, b-c, c-d, a-e  (cadeia + ramo)
 const edges = [

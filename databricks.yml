@@ -1,17 +1,11 @@
 # Porto Insights — Databricks Asset Bundle.
-# Deploy: scripts/build_frontend.sh && databricks bundle deploy -t dev -p fevm-pzanela-classic-aws
+# Deploy: databricks bundle deploy -t dev -p fevm-pzanela-classic-aws (o frontend não tem build)
 #
 # A config de runtime (command + env) vive no app.yaml (fonte única) — não duplicada aqui,
 # para evitar conflito entre as duas fontes. Aqui declaramos o recurso app, os scopes OBO e
 # o warehouse que o app pode usar.
 bundle:
   name: porto-insights
-
-# frontend/dist é gitignorado (artefato de build), mas PRECISA ir no deploy — o FastAPI o serve.
-# sync.include força o envio mesmo estando no .gitignore.
-sync:
-  include:
-    - frontend/dist/**
 
 variables:
   warehouse_id:

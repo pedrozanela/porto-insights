@@ -1,0 +1,19 @@
+{
+  "name": "porto-insights-vendor",
+  "private": true,
+  "description": "Gera frontend/vendor/ (bibliotecas do frontend prontas para o navegador; o app n\u00e3o tem build). S\u00f3 para mantenedores: ver scripts/build_vendor.sh.",
+  "dependencies": {
+    "@babel/standalone": "8.0.6",
+    "d3-force": "3.0.0",
+    "es-module-shims": "2.8.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-force-graph-2d": "1.27.1",
+    "react-markdown": "9.0.1",
+    "remark-gfm": "4.0.0",
+    "sucrase": "3.35.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.21.5"
+  }
+}

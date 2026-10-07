@@ -23,8 +23,12 @@ UI, conteúdo de demo e instruções em português; código em inglês.
 
 ## Arquitetura
 
-- **Frontend:** React + TypeScript + Vite + Tailwind. Buildado e servido como estático pelo
-  FastAPI (processo único, uma porta). Grafo com `react-force-graph-2d`.
+- **Frontend:** React + TypeScript (TSX) + Tailwind **sem build e sem npm**: `frontend/src/` é código
+  React comum, e o próprio navegador traduz cada `.tsx` para JS ao carregar (Sucrase via
+  es-module-shims, ~20 ms no total). Servido como estático pelo FastAPI (processo único, uma porta).
+  As bibliotecas (React, `react-force-graph-2d`, `react-markdown`, Tailwind v3 de navegador) ficam
+  prontas em `frontend/vendor/`, mapeadas por um import map no `index.html` — nada é baixado da
+  internet, nem no deploy nem no navegador. Sem checagem de tipos (os tipos só são removidos).
 - **Backend:** FastAPI + Uvicorn (Python 3.11+). Loop de agente assíncrono com tool calling;
   streaming ao frontend via **SSE**.
 - **Autenticação: 100% on-behalf-of-user (OBO).** Toda chamada a Model Serving, Genie One e
@@ -32,15 +36,18 @@ UI, conteúdo de demo e instruções em português; código em inglês.
   principal do app só faz health check e conecta ao Lakebase (infra do app). Em dev local, cai
   para o profile do CLI.
 - **Empacotamento:** Databricks Asset Bundle (`databricks.yml`, resource `app` com
-  `user_api_scopes`) + `app.yaml`. O build do frontend acontece antes do deploy.
+  `user_api_scopes`) + `app.yaml`.
 
 ```
 porto-insights/
   databricks.yml  app.yaml  requirements.txt  .env.example
   backend/    main.py config.py auth.py llm.py tracing.py lakebase.py
               mcp/  genie/  graph/  store/  agent/  tests/
-  frontend/   src/ (components, state, api, theme)
-  scripts/    discover, publish_workspace_instructions, build_frontend, deploy, run_graph_golden
+  frontend/   index.html (import map + config do Tailwind + CSS global)
+              src/ (components, state, api, graph, theme) — o app; é aqui que se edita
+              vendor/ (bibliotecas prontas, geradas por scripts/build_vendor.sh — não editar)
+              public/ (logo)  tests/ (vitest-compatíveis, rodam no node puro)
+  scripts/    discover, publish_workspace_instructions, build_vendor, deploy, run_graph_golden
     sample-fevm/  SEED do demo do FEVM (dados sintéticos de crédito) — NÃO é parte do produto:
                   seed_data, create_metric_views(.sql), create_genie_agent, validate_genie_one, _sql
   docs/       discovery, prerequisites-checklist, demo-script, demo-seed-google
@@ -79,26 +86,27 @@ CREATE_SUPPORT_GENIE_AGENT=true ./.venv/bin/python scripts/sample-fevm/create_ge
 export MODEL_ENDPOINTS="databricks-claude-sonnet-5:Claude Sonnet 5,databricks-gpt-5-5:GPT-5.5"
 export DEFAULT_MODEL_ENDPOINT="databricks-claude-sonnet-5"
 ./.venv/bin/python -m uvicorn backend.main:app --port 8000
-
-# frontend (outro terminal) — usa node@22; o Vite proxia /api para a 8000
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
-cd frontend && npm install && npm run dev
+# frontend: nada a rodar — abra http://localhost:8000. Edite frontend/src/ e recarregue a página.
 ```
+
+Bibliotecas do frontend: só ao **adicionar/atualizar uma biblioteca** (nunca para editar telas),
+rode `bash scripts/build_vendor.sh` (requer node + registry npm) — regenera `frontend/vendor/`
+e versione o resultado.
 
 ## Deploy (Databricks Apps via DAB)
 
 ```bash
-bash scripts/deploy.sh            # build do frontend + bundle deploy -t dev + run
+bash scripts/deploy.sh            # bundle deploy -t dev + run
 ```
 
 ### Deploy pelo próprio workspace (sem CLI)
 
 Importe a pasta inteira do repo no Workspace e rode `notebooks/deploy_porto_insights.py` (cria o
 Lakebase, publica o código e cria/atualiza o App). Para **alterar o frontend no workspace** (à mão
-ou com o Genie Code), edite `frontend/src/` e rode o notebook de novo: com `frontend_build=app`
-(padrão) o Databricks Apps builda o frontend no deploy (`npm install` + `npm run build`). Não edite
-`frontend/dist/` — é JS minificado gerado pelo build; ele só é usado com `frontend_build=prebuilt`.
-Se o App não alcançar o registry público do npm, informe o mirror interno no widget `npm_registry`.
+ou com o Genie Code), edite os `.tsx` em `frontend/src/` (React/JSX normal) e rode o notebook de
+novo — não há build nem npm. Peça ao Genie Code para editar **só `frontend/src/`** (nunca
+`frontend/vendor/`). Se uma edição quebrar a tela, o erro aparece no console do navegador (F12),
+com o arquivo e a linha.
 
 Na **primeira visita** de cada usuário, o Databricks pede consentimento dos scopes OBO
 (`genie`, `model-serving`, `ai-gateway`). O histórico no Lakebase exige que o service principal
@@ -108,6 +116,7 @@ do app seja dono do schema `porto_insights` — ver `docs/prerequisites-checklis
 
 ```bash
 ./.venv/bin/python -m pytest -q   # extratores, linker, allowlist, máquina de estados do Genie
+node --import ./frontend/tests/register.mjs --test 'frontend/tests/*.test.ts'  # grafo (node puro, sem npm)
 ```
 
 ## Observabilidade (opcional)
